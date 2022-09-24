@@ -6,8 +6,9 @@ No gurantees are made, so ensure you have a backup of your photos somewhere else
 ## Requirments
 
 - Python 3.10.7
-- ExifTool 12.33 (shoul be available on the Path)
+- [ExifTool](https://exiftool.org/) 12.45 (should be available in the system Path) - I used the Windows executable.
+- Only tested on Windows.
 
 ## Python packages
 
-- PyExifTool
+- PyExifTool 0.5.4 (use `pip install PyExifTool`)

@@ -3,6 +3,7 @@
 # Title: JsonPropertyMerger
 
 import json
+import exiftool
 
 
 class JsonPropertyMerger:
