@@ -181,6 +181,8 @@ class JsonPropertyMerger:
             # TODO: Maybe also use this: EXIF:XPComment (Comment tag used by Windows, encoded in UCS2.)
 
             # TODO: GPS -> Only update if the GPS values does not exist.
+            # Look at: https://exiftool.org/forum/index.php?topic=7826.0 (especially some of the last comments in 2021).
+            # My phone stores the GPS location at: QuickTime:UserData:GPSCoordinates
 
             # Update the imageFile
             try:
