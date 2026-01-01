@@ -1,5 +1,5 @@
 import json
-import os
+import sys
 from pathlib import Path
 from collections import defaultdict
 
@@ -89,7 +89,9 @@ def processJsonFiles(directory_path, output_file='output_keys.json'):
 
 if __name__ == "__main__":
     # Specify the directory to scan
-    directory_to_scan = "."  # Current directory, change as needed
+    directory_to_scan = "."  # Current directory, use arg to change
+    if len(sys.argv) > 1:
+        directory_to_scan = sys.argv[1]
     
     # Optional: specify custom output file name
     output_filename = "extracted_keys.json"
