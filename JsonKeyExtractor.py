@@ -26,33 +26,71 @@ def getNestedKeys(data, maxDepth=2, currentDepth=0):
     else:
         return type(data).__name__
 
-def mergeStructures(struct1, struct2):
+def mergeStructures(struct1, struct2, currentPath="", currentFile="", typeConflicts=None):
     """
     Merge two structure dictionaries, combining all keys from both.
+    Detects type conflicts and records them.
     """
+    if typeConflicts is None:
+        typeConflicts = []
+    
     if not isinstance(struct1, dict) or not isinstance(struct2, dict):
-        # If either is not a dict, prefer dict over other types, otherwise return struct2
-        if isinstance(struct1, dict):
+        # Type mismatch at this level
+        if isinstance(struct1, dict) and not isinstance(struct2, dict):
+            typeConflicts.append({
+                "path": currentPath,
+                "file": currentFile,
+                "expected_type": "dict",
+                "found_type": struct2 if isinstance(struct2, str) else type(struct2).__name__
+            })
             return struct1
-        elif isinstance(struct2, dict):
+        elif isinstance(struct2, dict) and not isinstance(struct1, dict):
+            typeConflicts.append({
+                "path": currentPath,
+                "file": currentFile,
+                "expected_type": "dict",
+                "found_type": struct1 if isinstance(struct1, str) else type(struct1).__name__
+            })
             return struct2
         else:
+            # Both are non-dict types, check if they match
+            type1 = struct1 if isinstance(struct1, str) else type(struct1).__name__
+            type2 = struct2 if isinstance(struct2, str) else type(struct2).__name__
+            if type1 != type2:
+                typeConflicts.append({
+                    "path": currentPath,
+                    "file": currentFile,
+                    "expected_type": type1,
+                    "found_type": type2
+                })
             return struct2
     
     result = struct1.copy()
     
     for key, value in struct2.items():
+        newPath = f"{currentPath}.{key}" if currentPath else key
+        
         if key in result:
             # If both have the key, merge their values recursively
             if isinstance(result[key], dict) and isinstance(value, dict):
-                result[key] = mergeStructures(result[key], value)
+                result[key] = mergeStructures(result[key], value, newPath, currentFile, typeConflicts)
             elif isinstance(result[key], list) and isinstance(value, list):
                 # For lists, merge the structure of their first elements
                 if result[key] and value:
-                    result[key] = [mergeStructures(result[key][0], value[0])]
+                    result[key] = [mergeStructures(result[key][0], value[0], f"{newPath}[0]", currentFile, typeConflicts)]
                 elif value:
                     result[key] = value
-            # Otherwise, keep existing value (could also choose to keep the new one)
+            else:
+                # Type mismatch for this key
+                type1 = result[key] if isinstance(result[key], str) else ("list" if isinstance(result[key], list) else "dict")
+                type2 = value if isinstance(value, str) else ("list" if isinstance(value, list) else "dict")
+                if type1 != type2:
+                    typeConflicts.append({
+                        "path": newPath,
+                        "file": currentFile,
+                        "expected_type": type1,
+                        "found_type": type2
+                    })
         else:
             # Key only exists in struct2, add it
             result[key] = value
@@ -73,6 +111,7 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
     # Dictionary to store all unique key structures found
     allStructures = {}
     combinedStructure = {}
+    typeConflicts = []
     filesProcessed = 0
     filesWithErrors = []
     
@@ -98,7 +137,7 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
                 allStructures[str(relativePath)] = structure
                 
                 # Merge into combined structure
-                combinedStructure = mergeStructures(combinedStructure, structure)
+                combinedStructure = mergeStructures(combinedStructure, structure, "", str(relativePath), typeConflicts)
                 
                 filesProcessed += 1
                 
@@ -112,6 +151,10 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
         "combined_structure": combinedStructure,
         "individual_files": allStructures
     }
+    
+    # Add type conflicts if any were found
+    if typeConflicts:
+        outputData["type_conflicts"] = typeConflicts
     
     # Save the results
     outputPath = Path(outputFile)
@@ -128,10 +171,22 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
         for filePath, error in filesWithErrors:
             print(f"  - {filePath}: {error}")
     
+    if typeConflicts:
+        print(f"\nType conflicts found: {len(typeConflicts)}")
+        print("\nType conflicts:")
+        for conflict in typeConflicts:
+            print(f"  - Path: {conflict['path']}")
+            print(f"    File: {conflict['file']}")
+            print(f"    Expected type: {conflict['expected_type']}")
+            print(f"    Found type: {conflict['found_type']}")
+            print()
+    
     print(f"\nOutput saved to: {outputPath.absolute()}")
     print(f"\nThe output contains:")
     print(f"  - 'combined_structure': Merged structure from all files")
     print(f"  - 'individual_files': Structure for each file")
+    if typeConflicts:
+        print(f"  - 'type_conflicts': List of type mismatches found")
 
 if __name__ == "__main__":
     # Specify the directory to scan
