@@ -2,15 +2,21 @@ import os
 import json
 import re
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict, Any
 
 
-def JsonFileFinder(json_path: str) -> Tuple[Optional[str], Optional[str]]:
+def JsonFileFinder(
+    json_path: str,
+    json_data: Optional[Dict[str, Any]] = None,
+    all_files: Optional[List[Path]] = None
+) -> Tuple[Optional[str], Optional[str]]:
     """
     Find a file matching a .json file and read its new name from the 'title' field.
     
     Args:
         json_path: Path to the .json file
+        json_data: Optional pre-loaded JSON data (to avoid re-parsing)
+        all_files: Optional list of all files in directory (to avoid re-scanning)
         
     Returns:
         Tuple of (matching_filename, new_title):
@@ -20,18 +26,21 @@ def JsonFileFinder(json_path: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         json_path_obj = Path(json_path)
         
-        # Check if json file exists
-        if not json_path_obj.exists() or not json_path_obj.is_file():
-            return (None, None)
+        # If json_data is provided, we assume the file exists and use the data
+        # Otherwise, check if file exists and read it
+        if json_data is None:
+            if not json_path_obj.exists() or not json_path_obj.is_file():
+                return (None, None)
+            
+            try:
+                with open(json_path_obj, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
+            except (json.JSONDecodeError, IOError, KeyError, UnicodeDecodeError):
+                return (None, None)
         
-        # Read the title from json file
-        try:
-            with open(json_path_obj, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                new_title = data.get('title')
-                if new_title is None:
-                    return (None, None)
-        except (json.JSONDecodeError, IOError, KeyError, UnicodeDecodeError):
+        # Extract title from json data
+        new_title = json_data.get('title')
+        if new_title is None:
             return (None, None)
         
         # Get the directory and json filename
@@ -42,8 +51,14 @@ def JsonFileFinder(json_path: str) -> Tuple[Optional[str], Optional[str]]:
         if json_filename.endswith('.json'):
             base_name = json_filename[:-5]  # Remove '.json'
             candidate_path = directory / base_name
-            if candidate_path.exists() and candidate_path.is_file():
-                return (base_name, new_title)
+            
+            # If all_files provided, check in the list; otherwise check filesystem
+            if all_files is not None:
+                if candidate_path in all_files:
+                    return (base_name, new_title)
+            else:
+                if candidate_path.exists() and candidate_path.is_file():
+                    return (base_name, new_title)
         
         # Strategy 2: Handle bracket notation and truncated filenames
         # Pattern: filename(N).json or truncated versions
@@ -55,16 +70,19 @@ def JsonFileFinder(json_path: str) -> Tuple[Optional[str], Optional[str]]:
             # Remove (N).json to get base
             base_without_bracket = json_filename[:bracket_match.start()]
             
-            # The base might be truncated, we need to find files that:
-            # 1. Start with the truncated base
-            # 2. Have (N) before their extension
-            try:
-                files_in_dir = list(directory.iterdir())
-            except OSError:
-                return (None, new_title)
+            # Get list of files to check
+            if all_files is not None:
+                # Filter to files in the same directory
+                files_in_dir = [f for f in all_files if f.parent == directory and f.is_file()]
+            else:
+                try:
+                    files_in_dir = list(directory.iterdir())
+                    files_in_dir = [f for f in files_in_dir if f.is_file()]
+                except OSError:
+                    return (None, new_title)
             
             for file in files_in_dir:
-                if file.is_file() and file.name != json_filename:
+                if file.name != json_filename:
                     # Check if file matches pattern: base*(N).ext
                     file_pattern = re.search(r'^(.+?)\((\d+)\)(\.[^.]+)$', file.name)
                     if file_pattern:
@@ -80,15 +98,19 @@ def JsonFileFinder(json_path: str) -> Tuple[Optional[str], Optional[str]]:
         if json_filename.endswith('.json'):
             base_without_json = json_filename[:-5]
             
-            # The base might be truncated (e.g., "IMG_18~2.jp" instead of "IMG_18~2.jpg")
-            # We need to find files that when you add an extension, match our truncated base
-            try:
-                files_in_dir = list(directory.iterdir())
-            except OSError:
-                return (None, new_title)
+            # Get list of files to check
+            if all_files is not None:
+                # Filter to files in the same directory
+                files_in_dir = [f for f in all_files if f.parent == directory and f.is_file()]
+            else:
+                try:
+                    files_in_dir = list(directory.iterdir())
+                    files_in_dir = [f for f in files_in_dir if f.is_file()]
+                except OSError:
+                    return (None, new_title)
             
             for file in files_in_dir:
-                if file.is_file() and file.name != json_filename:
+                if file.name != json_filename:
                     # Check if removing the file's extension gives us something that starts with our base
                     file_stem = file.stem  # filename without extension
                     

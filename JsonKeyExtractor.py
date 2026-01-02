@@ -122,8 +122,10 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
     # Track all file types
     fileTypeTracking = defaultdict(list)
     
-    # Find all files recursively (not just JSON)
+    # OPTIMIZATION: Scan all files once and cache the results
+    print("Scanning directory tree...")
     allFiles = [f for f in directory.rglob('*') if f.is_file()]
+    allFilesSet = set(allFiles)  # Use set for O(1) lookups
     
     # Categorize files by extension
     for file in allFiles:
@@ -137,7 +139,7 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
         fileTypeTracking[ext].append(relativePath)
     
     # Find all JSON files for processing
-    jsonFiles = list(directory.rglob('*.json'))
+    jsonFiles = [f for f in allFiles if f.suffix.lower() == '.json']
     
     if not jsonFiles:
         print(f"No JSON files found in '{directoryPath}'")
@@ -149,13 +151,20 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
     for jsonFile in jsonFiles:
         try:
             data = None
+            # OPTIMIZATION: Load JSON data once
             with open(jsonFile, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
             if data is not None:
                 # Store with relative path as key
                 relativePath = jsonFile.relative_to(directory)
-                matchingFilename, newTitle = JsonFileFinder(jsonFile)
+                
+                # OPTIMIZATION: Pass pre-loaded data and file list to avoid re-reading
+                matchingFilename, newTitle = JsonFileFinder(
+                    str(jsonFile),
+                    json_data=data,
+                    all_files=allFilesSet
+                )
 
                 if newTitle is None:
                     raise Exception(f"Title for {relativePath} is not available.")
