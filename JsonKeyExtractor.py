@@ -196,14 +196,14 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
         "mkv_files": [str(mkv.relative_to(directory)) for mkv in mkvFiles]
     }
     
-    # Add duplicate titles if any were found
-    if duplicateTitles:
-        outputData["duplicate_titles"] = duplicateTitles
-    
     # Add type conflicts if any were found
     if typeConflicts:
         outputData["type_conflicts"] = typeConflicts
     
+    # Add duplicate titles if any were found
+    if duplicateTitles:
+        outputData["duplicate_titles"] = duplicateTitles
+
     # Add missing files if any were found
     if missingFiles:
         outputData["missing_files"] = missingFiles
@@ -219,57 +219,32 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
     print(f"Files with errors: {len(filesWithErrors)}")
     
     if filesWithErrors:
-        print("\nErrors encountered:")
+        print("Errors encountered:")
         for filePath, error in filesWithErrors:
             print(f"  - {filePath}: {error}")
+
+    print(f"MKV files found: {len(mkvFiles)}")
     
     if typeConflicts:
-        print(f"\nType conflicts found: {len(typeConflicts)}")
-        print("\nType conflicts:")
-        for conflict in typeConflicts:
-            print(f"  - Path: {conflict['path']}")
-            print(f"    File: {conflict['file']}")
-            print(f"    Expected type: {conflict['expected_type']}")
-            print(f"    Found type: {conflict['found_type']}")
-            print()
-    
-    if missingFiles:
-        print(f"\nMissing files: {len(missingFiles)}")
-        print("\nFiles described by JSON but not found on disk:")
-        for missing in missingFiles:
-            print(f"  - JSON file: {missing['json_file']}")
-            print(f"    Expected file: {missing['expected_file']}")
-            print(f"    Expected at: {missing['expected_path']}")
-            print()
+        print(f"Type conflicts found: {len(typeConflicts)}")
     
     if duplicateTitles:
         totalDuplicates = sum(len(dup['json_files']) for dup in duplicateTitles)
-        print(f"\nDuplicate titles found: {len(duplicateTitles)} title(s) with duplicates in the same folder")
-        print(f"Total JSON files with duplicate titles: {totalDuplicates}")
-        print("\nDuplicate titles within same folder:")
-        for duplicate in duplicateTitles:
-            print(f"  Folder: {duplicate['folder']}")
-            print(f"  Title: {duplicate['title']}")
-            print(f"  JSON files ({len(duplicate['json_files'])}):")
-            for jsonFile in duplicate['json_files']:
-                print(f"    - {jsonFile}")
-            print()
+        print(f"Duplicate titles found: {len(duplicateTitles)} title(s) with duplicates in the same folder")
+        print(f" - Total JSON files with duplicate titles: {totalDuplicates}")
     
-    if mkvFiles:
-        print(f"\nMKV files found: {len(mkvFiles)}")
-        print("\nMKV files:")
-        for mkvFile in mkvFiles:
-            print(f"  - {mkvFile.relative_to(directory)}")
+    if missingFiles:
+        print(f"Missing files: {len(missingFiles)}")
     
     print(f"\nOutput saved to: {outputPath.absolute()}")
-    print(f"\nThe output contains:")
+    print(f"The output contains:")
     print(f"  - 'combined_structure': Merged structure from all files")
     print(f"  - 'individual_files': Structure for each file")
     print(f"  - 'mkv_files': List of all MKV files found")
-    if duplicateTitles:
-        print(f"  - 'duplicate_titles': JSON files with duplicate title fields in same folder")
     if typeConflicts:
         print(f"  - 'type_conflicts': List of type mismatches found")
+    if duplicateTitles:
+        print(f"  - 'duplicate_titles': JSON files with duplicate title fields in same folder")
     if missingFiles:
         print(f"  - 'missing_files': List of files described by JSON but not found on disk")
 
