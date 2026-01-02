@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Tuple, Optional, Set, Dict, Any
 
+BRACKET_PATTERN = re.compile(r'\((\d+)\)\.json$')
+FILE_PATTERN = re.compile(r'^(.+?)\((\d+)\)(\.[^.]+)$')
 
 def JsonFileFinder(
     json_path: str,
@@ -62,7 +64,7 @@ def JsonFileFinder(
         
         # Strategy 2: Handle bracket notation and truncated filenames
         # Pattern: filename(N).json or truncated versions
-        bracket_match = re.search(r'\((\d+)\)\.json$', json_filename)
+        bracket_match = BRACKET_PATTERN.search(json_filename)
         
         if bracket_match:
             # Has bracket notation like (2).json
@@ -82,7 +84,7 @@ def JsonFileFinder(
             
             for filename in filenames_to_check:
                 # Check if file matches pattern: base*(N).ext
-                file_pattern = re.search(r'^(.+?)\((\d+)\)(\.[^.]+)$', filename)
+                file_pattern = FILE_PATTERN.search(filename)
                 if file_pattern:
                     file_base = file_pattern.group(1)
                     file_bracket = file_pattern.group(2)
