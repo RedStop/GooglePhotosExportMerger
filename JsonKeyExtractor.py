@@ -114,23 +114,36 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
     typeConflicts = []
     filesProcessed = 0
     filesWithErrors = []
-    mkvFiles = []
     missingFiles = []
     titlesByFolder = {}  # Dictionary to track titles by folder
     duplicateTitles = []  # List of duplicate titles within same folder
     
-    # Find all JSON files recursively
-    jsonFiles = list(directory.rglob('*.json'))
+    # Track all file types
+    fileTypeTracking = defaultdict(list)
     
-    # Find all MKV files recursively
-    mkvFiles = list(directory.rglob('*.mkv'))
+    # Find all files recursively (not just JSON)
+    allFiles = [f for f in directory.rglob('*') if f.is_file()]
+    
+    # Categorize files by extension
+    for file in allFiles:
+        ext = file.suffix.lower()  # Get extension in lowercase
+        if not ext:
+            ext = 'no_extension'
+        else:
+            ext = ext[1:]  # Remove the leading dot
+        
+        relativePath = str(file.relative_to(directory))
+        fileTypeTracking[ext].append(relativePath)
+    
+    # Find all JSON files for processing
+    jsonFiles = list(directory.rglob('*.json'))
     
     if not jsonFiles:
         print(f"No JSON files found in '{directoryPath}'")
         return
     
     print(f"Found {len(jsonFiles)} JSON file(s) to process...")
-    print(f"Found {len(mkvFiles)} MKV file(s) in the directory tree")
+    print(f"Found {len(allFiles)} total file(s) in the directory tree")
     
     for jsonFile in jsonFiles:
         try:
@@ -189,11 +202,27 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
                     "json_files": jsonFilesList
                 })
 
+    # Prepare file type summary
+    # Extensions to show only count (not individual files)
+    countOnlyExtensions = {'json', 'jpg', 'jpeg', 'mp4'}
+    
+    fileTypeSummary = {
+        "summary": {},
+        "detailed_listings": {}
+    }
+    
+    for ext, files in sorted(fileTypeTracking.items()):
+        fileTypeSummary["summary"][ext] = len(files)
+        
+        # Only add detailed listing if not in count-only list
+        if ext.lower() not in countOnlyExtensions:
+            fileTypeSummary["detailed_listings"][ext] = sorted(files)
+    
     # Create final output with both individual and combined structures
     outputData = {
         "combined_structure": combinedStructure,
         "individual_files": allStructures,
-        "mkv_files": [str(mkv.relative_to(directory)) for mkv in mkvFiles]
+        "file_types": fileTypeSummary
     }
     
     # Add type conflicts if any were found
@@ -222,8 +251,10 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
         print("Errors encountered:")
         for filePath, error in filesWithErrors:
             print(f"  - {filePath}: {error}")
-
-    print(f"MKV files found: {len(mkvFiles)}")
+    
+    print(f"File types found:")
+    for ext, count in sorted(fileTypeSummary["summary"].items(), key=lambda x: x[1], reverse=True):
+        print(f"  - {ext}: {count}")
     
     if typeConflicts:
         print(f"Type conflicts found: {len(typeConflicts)}")
@@ -240,7 +271,9 @@ def processJsonFiles(directoryPath, outputFile='extracted_keys.json'):
     print(f"The output contains:")
     print(f"  - 'combined_structure': Merged structure from all files")
     print(f"  - 'individual_files': Structure for each file")
-    print(f"  - 'mkv_files': List of all MKV files found")
+    print(f"  - 'file_types': Summary and detailed listings of all file types")
+    print(f"    - 'summary': Count of each file type")
+    print(f"    - 'detailed_listings': Individual files (except json, jpg, jpeg, mp4)")
     if typeConflicts:
         print(f"  - 'type_conflicts': List of type mismatches found")
     if duplicateTitles:
