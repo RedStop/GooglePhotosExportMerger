@@ -1,8 +1,9 @@
+from JsonFileIdentifier import JsonFileFinder
+from collections import defaultdict
+from pathlib import Path
+from sortedcontainers import SortedSet
 import json
 import sys
-from pathlib import Path
-from collections import defaultdict
-from JsonFileIdentifier import JsonFileFinder
 
 def getNestedKeys(data, maxDepth=2, currentDepth=0):
     """
@@ -130,7 +131,7 @@ def processJsonFiles(directoryPath, outputDir='output'):
     allFiles = [f for f in directory.rglob('*') if f.is_file()]
     
     # Group files by their parent directory, excluding JSON files
-    nonJsonFilesByDirectory = defaultdict(set)
+    nonJsonFilesByDirectory = defaultdict(SortedSet)
     for file in allFiles:
         # Track file types
         ext = file.suffix.lower()
