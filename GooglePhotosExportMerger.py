@@ -177,6 +177,13 @@ class GooglePhotosExportMerger:
             handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S'))
             self.logger.addHandler(handler)
 
+    def _rel(self, path: Path) -> str:
+        """Return path relative to input directory for log readability."""
+        try:
+            return str(path.relative_to(self.input_path))
+        except ValueError:
+            return str(path)
+
     def run(self) -> MergeStats:
         stats = MergeStats()
 
@@ -266,7 +273,7 @@ class GooglePhotosExportMerger:
                     with open(json_path, 'r', encoding='utf-8') as f:
                         json_data = json.load(f)
                 except (json.JSONDecodeError, IOError, UnicodeDecodeError) as e:
-                    self.logger.warning("Failed to parse JSON %s: %s", json_path, e)
+                    self.logger.warning("Failed to parse JSON %s: %s", self._rel(json_path), e)
                     stats.skipped_json += 1
                     continue
 
@@ -278,7 +285,7 @@ class GooglePhotosExportMerger:
 
                 if matching_filename is None:
                     self.logger.warning("No matching media file for JSON: %s (title: %s)",
-                                        json_path.name, new_title)
+                                        self._rel(json_path), new_title)
                     stats.skipped_json += 1
                     continue
 
@@ -287,7 +294,7 @@ class GooglePhotosExportMerger:
                 strategy = _get_write_strategy(ext)
 
                 if strategy is None:
-                    self.logger.warning("Unsupported file type %s for: %s", ext, matching_filename)
+                    self.logger.warning("Unsupported file type %s for: %s", ext, self._rel(source_path))
                     stats.skipped_json += 1
                     continue
 
@@ -315,7 +322,7 @@ class GooglePhotosExportMerger:
                     ext = source_path.suffix.lower()
                     strategy = _get_write_strategy(ext)
                     if strategy is None:
-                        self.logger.info("Skipping unsupported orphan file type: %s", filename)
+                        self.logger.info("Skipping unsupported orphan file type: %s", self._rel(source_path))
                         continue
                     info = MediaFileInfo(
                         source_path=source_path,
@@ -325,7 +332,7 @@ class GooglePhotosExportMerger:
                         is_orphan=True,
                     )
                     orphans.append(info)
-                    self.logger.info("Orphan file (no matching JSON): %s", filename)
+                    self.logger.info("Orphan file (no matching JSON): %s", self._rel(source_path))
         return orphans
 
     def _resolve_dates_and_paths(self, et, media_files: List[MediaFileInfo], stats: MergeStats):
@@ -347,7 +354,7 @@ class GooglePhotosExportMerger:
             try:
                 tag_results = et.get_tags(file_paths, tz_tags)
             except Exception as e:
-                self.logger.warning("Failed to batch-read timezone from %s: %s", dir_path, e)
+                self.logger.warning("Failed to batch-read timezone from %s: %s", self._rel(dir_path), e)
                 tag_results = [{} for _ in infos]
 
             for info, tags in zip(infos, tag_results):
@@ -359,7 +366,7 @@ class GooglePhotosExportMerger:
 
                 if epoch_str is None:
                     info.error = "No photoTakenTime in JSON"
-                    self.logger.warning("No photoTakenTime for %s", info.filename)
+                    self.logger.warning("No photoTakenTime for %s", self._rel(info.source_path))
                     continue
 
                 epoch = int(epoch_str)
@@ -375,7 +382,7 @@ class GooglePhotosExportMerger:
 
                 if tz is None:
                     tz = GMT_PLUS_2
-                    self.logger.warning("No timezone in EXIF for %s, using GMT+02:00 fallback", info.filename)
+                    self.logger.warning("No timezone in EXIF for %s, using GMT+02:00 fallback", self._rel(info.source_path))
 
                 utc_dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
                 local_dt = utc_dt.astimezone(tz)
@@ -391,7 +398,7 @@ class GooglePhotosExportMerger:
             try:
                 tag_results = et.get_tags(file_paths, DATE_TAGS_PRIORITY)
             except Exception as e:
-                self.logger.warning("Failed to batch-read dates from %s: %s", dir_path, e)
+                self.logger.warning("Failed to batch-read dates from %s: %s", self._rel(dir_path), e)
                 tag_results = [{} for _ in infos]
 
             for info, tags in zip(infos, tag_results):
@@ -418,9 +425,9 @@ class GooglePhotosExportMerger:
                         resolved_dt = datetime.fromtimestamp(ctime, tz=GMT_PLUS_2)
                         date_source = 'file_creation_date'
                         stats.date_from_filesystem += 1
-                        self.logger.warning("Using file creation date for orphan: %s", info.filename)
+                        self.logger.warning("Using file creation date for orphan: %s", self._rel(info.source_path))
                     except OSError as e:
-                        self.logger.error("Cannot stat file %s: %s", info.filename, e)
+                        self.logger.error("Cannot stat file %s: %s", self._rel(info.source_path), e)
 
                 if resolved_dt:
                     info.resolved_datetime = resolved_dt
@@ -435,11 +442,13 @@ class GooglePhotosExportMerger:
                 info.month = 'unknown'
 
             title = info.new_title or info.filename
-            # Ensure title has correct extension
+            # Ensure title has correct extension (always lowercase)
             title_ext = Path(title).suffix.lower()
-            source_ext = info.source_path.suffix
-            if title_ext != source_ext.lower():
+            source_ext = info.source_path.suffix.lower()
+            if title_ext != source_ext:
                 title = Path(title).stem + source_ext
+            elif Path(title).suffix != title_ext:
+                title = Path(title).stem + title_ext
 
             info.new_title = title
             info.output_path = self.output_path / info.year / info.month / title
@@ -465,14 +474,14 @@ class GooglePhotosExportMerger:
                 if info.sidecar_path:
                     info.sidecar_path = path.parent / f"{stem}_{counter}.xmp"
                 stats.duplicates_renamed += 1
-                self.logger.warning("Duplicate filename resolved: %s -> %s", original_path.name, new_name)
+                self.logger.warning("Duplicate filename resolved: %s -> %s (source: %s)", original_path.name, new_name, self._rel(info.source_path))
             else:
                 seen[path] = 1
 
     def _process_files(self, et, media_files: List[MediaFileInfo], stats: MergeStats):
         for info in media_files:
             if info.output_path is None:
-                self.logger.error("No output path for %s, skipping", info.filename)
+                self.logger.error("No output path for %s, skipping", self._rel(info.source_path))
                 stats.errors += 1
                 continue
 
@@ -482,7 +491,7 @@ class GooglePhotosExportMerger:
                 else:
                     self._process_matched(et, info, stats)
             except Exception as e:
-                self.logger.error("Failed to process %s: %s", info.filename, e)
+                self.logger.error("Failed to process %s: %s", self._rel(info.source_path), e)
                 stats.errors += 1
 
     def _process_matched(self, et, info: MediaFileInfo, stats: MergeStats):
@@ -529,7 +538,7 @@ class GooglePhotosExportMerger:
             et.execute(*[p.encode('utf-8') if isinstance(p, str) else p for p in params])
             stats.written += 1
         except Exception as e:
-            self.logger.warning("ExifTool write failed for %s, falling back to copy: %s", info.filename, e)
+            self.logger.warning("ExifTool write failed for %s, falling back to copy: %s", self._rel(info.source_path), e)
             try:
                 shutil.copy2(str(info.source_path), str(info.output_path))
                 # Try in-place write
@@ -552,10 +561,10 @@ class GooglePhotosExportMerger:
                 try:
                     et.execute(*[p.encode('utf-8') if isinstance(p, str) else p for p in in_place_params])
                 except Exception as e2:
-                    self.logger.warning("In-place write also failed for %s: %s (file copied without metadata)", info.filename, e2)
+                    self.logger.warning("In-place write also failed for %s: %s (file copied without metadata)", self._rel(info.source_path), e2)
                 stats.written += 1
             except Exception as e3:
-                self.logger.error("Copy also failed for %s: %s", info.filename, e3)
+                self.logger.error("Copy also failed for %s: %s", self._rel(info.source_path), e3)
                 stats.errors += 1
                 return
 
@@ -577,7 +586,7 @@ class GooglePhotosExportMerger:
             shutil.copy2(str(info.source_path), str(info.output_path))
             stats.written += 1
         except Exception as e:
-            self.logger.error("Failed to copy orphan %s: %s", info.filename, e)
+            self.logger.error("Failed to copy orphan %s: %s", self._rel(info.source_path), e)
             stats.errors += 1
             return
 
@@ -598,9 +607,9 @@ class GooglePhotosExportMerger:
         try:
             et.execute(*[p.encode('utf-8') if isinstance(p, str) else p for p in sidecar_params])
             stats.sidecars_created += 1
-            self.logger.info("Created XMP sidecar: %s", info.sidecar_path.name)
+            self.logger.info("Created XMP sidecar for %s: %s", self._rel(info.source_path), info.sidecar_path.name)
         except Exception as e:
-            self.logger.warning("Failed to create XMP sidecar for %s: %s", info.filename, e)
+            self.logger.warning("Failed to create XMP sidecar for %s: %s", self._rel(info.source_path), e)
 
     def _set_filesystem_timestamps(self, et, info: MediaFileInfo):
         if info.resolved_datetime is None:
@@ -624,14 +633,14 @@ class GooglePhotosExportMerger:
                 ]
                 et.execute(*[p.encode('utf-8') if isinstance(p, str) else p for p in ts_params])
             except Exception as e:
-                self.logger.warning("Failed to set filesystem timestamps for %s: %s", file_path.name, e)
+                self.logger.warning("Failed to set filesystem timestamps for %s: %s", self._rel(info.source_path), e)
 
     def _log_dry_run(self, info: MediaFileInfo):
         kind = "ORPHAN" if info.is_orphan else "MATCHED"
         strategy_name = info.write_strategy.name if info.write_strategy else "UNKNOWN"
         sidecar = f" + sidecar: {info.sidecar_path.name}" if info.sidecar_path else ""
 
-        self.logger.info("[DRY RUN] [%s] %s", kind, info.filename)
+        self.logger.info("[DRY RUN] [%s] %s", kind, self._rel(info.source_path))
         self.logger.info("  Source: %s", info.source_path)
         self.logger.info("  Dest:   %s", info.output_path)
         self.logger.info("  Strategy: %s%s", strategy_name, sidecar)
