@@ -738,6 +738,13 @@ if __name__ == '__main__':
     blocked_descriptions = [
         # Add unwanted description strings here, e.g.:
         # "Photo uploaded by Google Photos",
+        "          ",
+        "SONY DSC",
+        "OLYMPUS DIGITAL CAMERA",
+        "DCIM\\100MEDIA\\DJI_0009.JPG",
+        "DCIM\\100MEDIA\\DJI_0021.JPG",
+        "DCIM\\100MEDIA\\DJI_0036.JPG",
+        "DCIM\\100MEDIA\\DJI_0040.JPG",
     ]
 
     merger = GooglePhotosExportMerger(input_dir, output_dir, dry_run=dry_run,
