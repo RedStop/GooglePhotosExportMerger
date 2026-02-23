@@ -159,7 +159,10 @@ def _build_sidecar_params(info: MediaFileInfo, gps: Optional[Dict[str, float]]) 
     if not info.clear_descriptions and info.json_data:
         desc = info.json_data.get('description', '')
         if desc:
-            params.append(f'-XMP-dc:Description={desc}')
+            escaped, needs_E = _escape_description(desc)
+            if needs_E:
+                params.append('-E')
+            params.append(f'-XMP-dc:Description={escaped}')
 
     if gps:
         params.append(f'-XMP:GPSLatitude={gps["latitude"]}')
@@ -167,6 +170,17 @@ def _build_sidecar_params(info: MediaFileInfo, gps: Optional[Dict[str, float]]) 
         params.append(f'-XMP:GPSAltitude={gps["altitude"]}')
 
     return params
+
+
+def _escape_description(desc: str) -> tuple:
+    """Escape newlines for ExifTool's -execute batch protocol.
+    Returns (escaped_desc, needs_E_flag)."""
+    if '\n' not in desc and '\r' not in desc:
+        return desc, False
+    escaped = desc.replace('&', '&amp;')
+    escaped = escaped.replace('\n', '&#xa;')
+    escaped = escaped.replace('\r', '&#xd;')
+    return escaped, True
 
 
 class GooglePhotosExportMerger:
@@ -551,8 +565,11 @@ class GooglePhotosExportMerger:
         elif info.json_data:
             desc = info.json_data.get('description', '')
             if desc:
-                params.append(f'-XMP-dc:Description={desc}')
-                params.append(f'-EXIF:ImageDescription={desc}')
+                escaped, needs_E = _escape_description(desc)
+                if needs_E:
+                    params.append('-E')
+                params.append(f'-XMP-dc:Description={escaped}')
+                params.append(f'-EXIF:ImageDescription={escaped}')
 
         # GPS
         gps = None
