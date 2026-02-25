@@ -343,7 +343,7 @@ class GooglePhotosExportMerger:
                     ext = source_path.suffix.lower()
                     strategy = _get_write_strategy(ext)
                     if strategy is None:
-                        self.logger.info("Skipping unsupported orphan file type: %s", self._rel(source_path))
+                        self.logger.warning("Skipping unsupported file type %s: %s", source_path.suffix.lower() or '(no extension)', self._rel(source_path))
                         continue
                     info = MediaFileInfo(
                         source_path=source_path,
