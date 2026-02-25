@@ -3,7 +3,7 @@ test_merger.py — Comprehensive unit tests for GooglePhotosExportMerger.
 
 This file is built in stages:
   Part 1  (done):    File factories — minimal valid binary files + JSON files.
-  Part 2  (current): Test infrastructure — setUpClass, tearDownClass, summary runner.
+  Part 2  (done): Test infrastructure — setUpClass, tearDownClass, summary runner.
   Part 3  (future):  All test_* methods.
 """
 
@@ -11,6 +11,7 @@ import json
 import logging
 import shutil
 import struct
+import sys
 import tempfile
 import unittest
 import zlib
@@ -691,4 +692,110 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
 
 # ---------------------------------------------------------------------------
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+
+    # ── Category mapping ─────────────────────────────────────────────────────
+    # Each entry: (display_label, tuple_of_method_name_prefixes).
+    # A test is assigned to the FIRST category whose prefix it matches.
+    # Prefixes are chosen to be unambiguous (e.g. "test_output_organ" to
+    # distinguish test_output_organized_* from test_output_timestamps_*).
+    _CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
+        ("Input Integrity",           ("test_input_files_",    "test_input_file_count_")),
+        ("Output Structure",          ("test_no_json_",        "test_output_organ",
+                                       "test_all_media_")),
+        ("GPS (4 quadrants + alt)",   ("test_gps_",)),
+        ("Timezones",                 ("test_timezone_",)),
+        ("Descriptions (UTF-8, etc)", ("test_description_",)),
+        ("File Types (matched)",      ("test_matched_",)),
+        ("Orphan Files",              ("test_orphan_",)),
+        ("XMP Sidecars",              ("test_xmp_",)),
+        ("Duplicates",                ("test_duplicate_",)),
+        ("Bracket Notation",          ("test_bracket_",)),
+        ("File Timestamps",           ("test_input_timestamps_", "test_output_timestamps_",
+                                       "test_sidecar_timestamps_")),
+        ("Stats Verification",        ("test_stats_",)),
+        ("Video UTC Time",            ("test_mp4_time_",       "test_mov_time_")),
+        ("Special Filenames",         ("test_spaces_",         "test_leading_",
+                                       "test_parentheses_")),
+    ]
+
+    def _cat(name: str) -> str:
+        """Return the display category for a test method name."""
+        for label, prefixes in _CATEGORIES:
+            if any(name.startswith(p) for p in prefixes):
+                return label
+        return "Other"
+
+    # ── Custom result collector ──────────────────────────────────────────────
+    class _SummaryResult(unittest.TextTestResult):
+        """TextTestResult that additionally records per-test pass/fail status."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._outcomes: list[tuple[str, str]] = []  # (method_name, status)
+
+        def _record(self, test: unittest.TestCase, status: str) -> None:
+            self._outcomes.append((test._testMethodName, status))
+
+        def addSuccess(self, test):
+            super().addSuccess(test)
+            self._record(test, 'PASS')
+
+        def addFailure(self, test, err):
+            super().addFailure(test, err)
+            self._record(test, 'FAIL')
+
+        def addError(self, test, err):
+            super().addError(test, err)
+            self._record(test, 'ERROR')
+
+        def addSkip(self, test, reason):
+            super().addSkip(test, reason)
+            self._record(test, 'SKIP')
+
+    # ── Run suite ────────────────────────────────────────────────────────────
+    logging.basicConfig(
+        format='%(levelname)s %(name)s: %(message)s',
+        level=logging.WARNING,
+    )
+    suite  = unittest.TestLoader().loadTestsFromTestCase(TestGooglePhotosExportMerger)
+    runner = unittest.TextTestRunner(verbosity=2, resultclass=_SummaryResult)
+    result = runner.run(suite)
+
+    # ── Category summary table ───────────────────────────────────────────────
+    # tearDownClass has already printed the MergeStats and prompted for cleanup.
+    # Now print the per-category test results.
+    from collections import defaultdict
+    cat_stats: dict[str, dict[str, int]] = defaultdict(
+        lambda: {'pass': 0, 'fail': 0, 'total': 0}
+    )
+    for method, status in result._outcomes:
+        c = _cat(method)
+        cat_stats[c]['total'] += 1
+        if status == 'PASS':
+            cat_stats[c]['pass'] += 1
+        else:
+            cat_stats[c]['fail'] += 1
+
+    W = 28  # category column width
+    print()
+    print('=' * 62)
+    print('              TEST RESULTS BY CATEGORY')
+    print('=' * 62)
+    print(f"{'Category':<{W}} | {'Pass':>4} | {'Fail':>4} | {'Total':>5}")
+    print('-' * 62)
+    grand = {'pass': 0, 'fail': 0, 'total': 0}
+    for label, _ in _CATEGORIES:
+        s = cat_stats.get(label, {'pass': 0, 'fail': 0, 'total': 0})
+        print(f"{label:<{W}} | {s['pass']:>4} | {s['fail']:>4} | {s['total']:>5}")
+        for k in grand:
+            grand[k] += s[k]
+    if 'Other' in cat_stats:
+        s = cat_stats['Other']
+        print(f"{'Other':<{W}} | {s['pass']:>4} | {s['fail']:>4} | {s['total']:>5}")
+        for k in grand:
+            grand[k] += s[k]
+    print('-' * 62)
+    print(f"{'TOTAL':<{W}} | {grand['pass']:>4} | {grand['fail']:>4} | {grand['total']:>5}")
+    print('=' * 62)
+
+    sys.exit(0 if result.wasSuccessful() else 1)
