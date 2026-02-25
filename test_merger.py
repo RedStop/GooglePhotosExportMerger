@@ -633,6 +633,10 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         make_json_file(d / '_DSC5757-Enhanced-NR - Kruger.jpg.json',
                        title='_DSC5757-Enhanced-NR - Kruger.jpg')
 
+        make_media_file(d / 'photo(1711).jpg')
+        make_json_file(d / 'photo(1711).jpg.json',
+                       title='photo(1711).jpg')
+
         # ── Sidecars ───────────────────────────────────────────────────────
         # Dedicated files with unique stems to avoid the stem collision that
         # affects FileTypes/Matched/test.* (all target test.xmp, so only the
@@ -767,6 +771,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             # SpecialChars
             'Kosi Bay - 2014 - 179.jpg',
             '_DSC5757-Enhanced-NR - Kruger.jpg',
+            'photo(1711).jpg',
             # Sidecars
             'sc_png.png', 'sc_gif.gif', 'sc_avi.avi',
         ]
@@ -1198,6 +1203,138 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                              "photo.jpg not found in output")
         self.assertIsNotNone(self._find_output_file('photo_2.jpg'),
                              "photo_2.jpg not found in output")
+
+    # ------------------------------------------------------------------
+    # Category 11 — File Timestamps
+    # ------------------------------------------------------------------
+
+    def test_input_timestamps_unchanged(self) -> None:
+        """No input file mtime, ctime, or size changed during the merger run."""
+        snapshot_after = self._snapshot(self.input_dir)
+        self.assertEqual(
+            self.input_snapshot, snapshot_after,
+            "Input directory snapshot changed after merger run (mtime, ctime, or size differs)",
+        )
+
+    def test_output_timestamps_set(self) -> None:
+        """photo_basic.jpg output mtime matches the JSON epoch converted to GMT+02:00.
+
+        The merger writes FileModifyDate=2024:08:08 12:44:06+02:00 (epoch 1723113846 in
+        UTC), so st_mtime must be within 2 seconds of that epoch.
+        """
+        import datetime as _dt
+        expected_utc = _dt.datetime(2024, 8, 8, 10, 44, 6, tzinfo=_dt.timezone.utc)
+        expected_ts  = expected_utc.timestamp()  # = 1723113846.0
+
+        output = self._find_output_file('photo_basic.jpg')
+        self.assertIsNotNone(output, "photo_basic.jpg not found in output")
+        self.assertAlmostEqual(
+            output.stat().st_mtime, expected_ts, delta=2,
+            msg=(f"photo_basic.jpg mtime ({output.stat().st_mtime:.0f}) "
+                 f"not within 2 s of expected ({expected_ts:.0f})"),
+        )
+
+    def test_sidecar_timestamps_match(self) -> None:
+        """sc_avi.avi and sc_avi.xmp have matching mtimes (both set by _set_filesystem_timestamps)."""
+        avi = self._find_output_file('sc_avi.avi')
+        xmp = self._find_output_file('sc_avi.xmp')
+        self.assertIsNotNone(avi, "sc_avi.avi not found in output")
+        self.assertIsNotNone(xmp, "sc_avi.xmp not found in output")
+        self.assertAlmostEqual(
+            avi.stat().st_mtime, xmp.stat().st_mtime, delta=2,
+            msg=(f"sc_avi.avi mtime ({avi.stat().st_mtime:.3f}) and "
+                 f"sc_avi.xmp mtime ({xmp.stat().st_mtime:.3f}) differ by more than 2 s"),
+        )
+
+    # ------------------------------------------------------------------
+    # Category 12 — Stats Verification
+    # ------------------------------------------------------------------
+    # Counts derivation (after adding photo(1711).jpg to SpecialChars):
+    #   total=48  (41 matched + 7 orphans)
+    #   matched=41 (all dirs except FileTypes/Orphans + orphan_no_json)
+    #   orphans=7  (orphan_no_json + 6 × FileTypes/Orphans)
+    #   gps=8      (6 GPS Tests + sc_png + sc_avi)
+    #   sidecars=4 (sc_png.xmp + sc_gif.xmp + sc_avi.xmp + test.xmp via AVI)
+    #   errors=0
+
+    def test_stats_total_count(self) -> None:
+        """Total media files processed = 48."""
+        self.assertEqual(self.stats.total_media_files, 48,
+                         f"Expected 48 total, got {self.stats.total_media_files}")
+
+    def test_stats_matched_count(self) -> None:
+        """Matched files (with JSON) = 41."""
+        self.assertEqual(self.stats.matched, 41,
+                         f"Expected 41 matched, got {self.stats.matched}")
+
+    def test_stats_orphan_count(self) -> None:
+        """Orphan files (no JSON) = 7."""
+        self.assertEqual(self.stats.orphans, 7,
+                         f"Expected 7 orphans, got {self.stats.orphans}")
+
+    def test_stats_gps_written(self) -> None:
+        """GPS tags written = 8 (6 GPS Tests + sc_png + sc_avi)."""
+        self.assertEqual(self.stats.gps_written, 8,
+                         f"Expected 8 GPS writes, got {self.stats.gps_written}")
+
+    def test_stats_sidecars_created(self) -> None:
+        """XMP sidecars created = 4 (sc_png, sc_gif, sc_avi, test.xmp from FileTypes/AVI)."""
+        self.assertEqual(self.stats.sidecars_created, 4,
+                         f"Expected 4 sidecars, got {self.stats.sidecars_created}")
+
+    def test_stats_zero_errors(self) -> None:
+        """Merger reports zero errors for well-formed test data."""
+        self.assertEqual(self.stats.errors, 0,
+                         f"Expected 0 errors, got {self.stats.errors}")
+
+    # ------------------------------------------------------------------
+    # Category 13 — Video UTC Time
+    # ------------------------------------------------------------------
+    # QuickTime stores CreateDate as a plain integer (seconds since Mac epoch)
+    # without timezone info.  ExifTool returns it as "YYYY:MM:DD HH:MM:SS"
+    # with no +HH:MM suffix.
+
+    def test_mp4_time_utc(self) -> None:
+        """MP4: QuickTime:CreateDate is present and has no timezone offset suffix."""
+        import re
+        tags = self._read_tags('test.mp4', ['QuickTime:CreateDate'])
+        dt = tags.get('QuickTime:CreateDate')
+        self.assertIsNotNone(dt, "test.mp4: QuickTime:CreateDate is missing")
+        self.assertTrue(str(dt).strip(), "test.mp4: QuickTime:CreateDate is empty")
+        self.assertNotRegex(str(dt), r'[+-]\d{2}:\d{2}$',
+                            f"test.mp4: QuickTime:CreateDate has unexpected tz suffix: {dt!r}")
+
+    def test_mov_time_utc(self) -> None:
+        """MOV: QuickTime:CreateDate is present and has no timezone offset suffix."""
+        import re
+        tags = self._read_tags('test.mov', ['QuickTime:CreateDate'])
+        dt = tags.get('QuickTime:CreateDate')
+        self.assertIsNotNone(dt, "test.mov: QuickTime:CreateDate is missing")
+        self.assertTrue(str(dt).strip(), "test.mov: QuickTime:CreateDate is empty")
+        self.assertNotRegex(str(dt), r'[+-]\d{2}:\d{2}$',
+                            f"test.mov: QuickTime:CreateDate has unexpected tz suffix: {dt!r}")
+
+    # ------------------------------------------------------------------
+    # Category 14 — Special Filenames
+    # ------------------------------------------------------------------
+
+    def test_spaces_in_filename(self) -> None:
+        """Filename with spaces and dashes: EXIF:DateTimeOriginal written correctly."""
+        tags = self._read_tags('Kosi Bay - 2014 - 179.jpg', ['EXIF:DateTimeOriginal'])
+        self.assertEqual(tags.get('EXIF:DateTimeOriginal'), '2024:08:08 12:44:06',
+                         "Kosi Bay - 2014 - 179.jpg: EXIF:DateTimeOriginal mismatch")
+
+    def test_leading_underscore(self) -> None:
+        """Filename with leading underscore: EXIF:DateTimeOriginal written correctly."""
+        tags = self._read_tags('_DSC5757-Enhanced-NR - Kruger.jpg', ['EXIF:DateTimeOriginal'])
+        self.assertEqual(tags.get('EXIF:DateTimeOriginal'), '2024:08:08 12:44:06',
+                         "_DSC5757-Enhanced-NR - Kruger.jpg: EXIF:DateTimeOriginal mismatch")
+
+    def test_parentheses_in_filename(self) -> None:
+        """Filename with parentheses in the base name (not bracket notation): EXIF date set."""
+        tags = self._read_tags('photo(1711).jpg', ['EXIF:DateTimeOriginal'])
+        self.assertEqual(tags.get('EXIF:DateTimeOriginal'), '2024:08:08 12:44:06',
+                         "photo(1711).jpg: EXIF:DateTimeOriginal mismatch")
 
     # ------------------------------------------------------------------
     # tearDownClass
