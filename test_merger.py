@@ -431,7 +431,7 @@ def make_json_file(path: Path, **fields: Any) -> Path:
     ``.json`` suffix (e.g. ``photo.jpg.json`` → title ``"photo.jpg"``).
 
     Default ``photoTakenTime.timestamp`` is ``"1723113846"``
-    (2024-08-08 09:04:06 UTC).
+    (2024-08-08 10:44:06 UTC).
 
     Creates any missing parent directories.  Returns *path*.
     """
@@ -479,8 +479,8 @@ def make_json_file(path: Path, **fields: Any) -> Path:
 # Blocked descriptions list passed to the merger — mirrors a typical production run.
 _BLOCKED_DESCRIPTIONS = ['SONY DSC']
 
-# Epoch shared across most test JSON files: 2024-08-08 09:04:06 UTC.
-# In GMT+02:00 (the merger's fallback TZ) this is 2024-08-08 11:04:06,
+# Epoch shared across most test JSON files: 2024-08-08 10:44:06 UTC.
+# In GMT+02:00 (the merger's fallback TZ) this is 2024-08-08 12:44:06,
 # so output files land in output/2024/08/.
 _EPOCH_DEFAULT = '1723113846'
 
@@ -616,7 +616,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         # ── FileTypes / Matched ────────────────────────────────────────────
         # One file per supported extension, each paired with a JSON.
         d = inp / 'FileTypes' / 'Matched'
-        for ext in ('.jpg', '.jpeg', '.png', '.gif', '.tiff',
+        for ext in ('.jpg', '.jpeg', '.png', '.gif', '.tiff', '.tif',
                     '.mp4', '.mov', '.avi', '.mkv', '.webm', '.heic', '.dng', '.cr2'):
             make_media_file(d / f'test{ext}')
             make_json_file(d / f'test{ext}.json')
@@ -671,6 +671,12 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         make_media_file(d / 'UPPERCASE.JPG')
         make_json_file(d / 'UPPERCASE.JPG.json',
                        title='UPPERCASE.JPG')
+
+        # ── Malformed JSON (skipped_json counter) ────────────────────────────────
+        # A JSON file that cannot be decoded increments stats.skipped_json.
+        # Place it alongside a real media file so the merger discovers it.
+        bad_json = inp / 'Descriptions' / 'bad_json.jpg.json'
+        bad_json.write_bytes(b'{not valid json')
 
         # ── Deep File (depth > 2 — should be skipped by the merger) ────────────
         # Files more than 2 levels deep are ignored by _scan_files.  This file must
@@ -802,7 +808,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             'desc_utf8.jpg', 'desc_escaped.jpg', 'desc_newline.jpg',
             'desc_crlf.jpg', 'desc_empty.jpg', 'desc_blocked.jpg', 'desc_long.jpg',
             # FileTypes / Matched (title = "test.<ext>")
-            'test.jpg', 'test.jpeg', 'test.png', 'test.gif', 'test.tiff',
+            'test.jpg', 'test.jpeg', 'test.png', 'test.gif', 'test.tiff', 'test.tif',
             'test.mp4', 'test.mov', 'test.avi', 'test.mkv', 'test.webm',
             'test.heic', 'test.dng', 'test.cr2',
             # FileTypes / Orphans (no JSON → copied with original name)
@@ -1097,6 +1103,11 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self._assert_file_exists('test', '.tiff')
         self._assert_exif_date('test', '.tiff')
 
+    def test_matched_tif(self) -> None:
+        """.tif (three-char TIFF extension): direct write — output exists and date is set."""
+        self._assert_file_exists('test', '.tif')
+        self._assert_exif_date('test', '.tif')
+
     def test_matched_mp4(self) -> None:
         """MP4: video-with-sidecar strategy — output exists."""
         self._assert_file_exists('test', '.mp4')
@@ -1328,26 +1339,26 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # Category 12 — Stats Verification
     # ------------------------------------------------------------------
     # Counts derivation:
-    #   total=51  (44 matched + 7 orphans)
-    #   matched=44 (all dirs except FileTypes/Orphans + orphan_no_json;
-    #               includes test.cr2, tz_offset_time.jpg, UPPERCASE.JPG)
+    #   total=52  (45 matched + 7 orphans)
+    #   matched=45 (all dirs except FileTypes/Orphans + orphan_no_json;
+    #               includes test.cr2, test.tif, tz_offset_time.jpg, UPPERCASE.JPG)
     #   orphans=7  (orphan_no_json + 6 × FileTypes/Orphans)
     #   gps=8      (6 GPS Tests + sc_png + sc_avi)
     #   sidecars=4 (sc_png.xmp + sc_gif.xmp + sc_avi.xmp + test.xmp via AVI)
     #   descriptions_cleared=1  (desc_blocked.jpg)
     #   duplicates_renamed=2    (same_name_b → same_name_2, photo(2) → photo_2)
-    #   written=51
+    #   written=52
     #   errors=0
 
     def test_stats_total_count(self) -> None:
-        """Total media files processed = 51."""
-        self.assertEqual(self.stats.total_media_files, 51,
-                         f"Expected 51 total, got {self.stats.total_media_files}")
+        """Total media files processed = 52."""
+        self.assertEqual(self.stats.total_media_files, 52,
+                         f"Expected 52 total, got {self.stats.total_media_files}")
 
     def test_stats_matched_count(self) -> None:
-        """Matched files (with JSON) = 44."""
-        self.assertEqual(self.stats.matched, 44,
-                         f"Expected 44 matched, got {self.stats.matched}")
+        """Matched files (with JSON) = 45."""
+        self.assertEqual(self.stats.matched, 45,
+                         f"Expected 45 matched, got {self.stats.matched}")
 
     def test_stats_orphan_count(self) -> None:
         """Orphan files (no JSON) = 7."""
@@ -1371,8 +1382,8 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
 
     def test_stats_written_count(self) -> None:
         """Files written = 51 (total_media_files when errors == 0)."""
-        self.assertEqual(self.stats.written, 51,
-                         f"Expected 51 written, got {self.stats.written}")
+        self.assertEqual(self.stats.written, 52,
+                         f"Expected 52 written, got {self.stats.written}")
 
     def test_stats_descriptions_cleared(self) -> None:
         """descriptions_cleared = 1 (desc_blocked.jpg carries 'SONY DSC')."""
@@ -1383,6 +1394,11 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         """duplicates_renamed = 2 (one from Duplicates/, one from BracketNotation/)."""
         self.assertEqual(self.stats.duplicates_renamed, 2,
                          f"Expected 2 duplicates renamed, got {self.stats.duplicates_renamed}")
+
+    def test_stats_skipped_json(self) -> None:
+        """skipped_json = 1 (bad_json.jpg.json contains invalid JSON)."""
+        self.assertEqual(self.stats.skipped_json, 1,
+                         f"Expected 1 skipped_json, got {self.stats.skipped_json}")
 
     # ------------------------------------------------------------------
     # Category 13 — Video UTC Time
