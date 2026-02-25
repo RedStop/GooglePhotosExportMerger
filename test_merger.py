@@ -756,6 +756,339 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         )
 
     # ------------------------------------------------------------------
+    # Helpers — output navigation & tag reading
+    # ------------------------------------------------------------------
+
+    def _find_output_file(self, name: str) -> 'Path | None':
+        """Return the first output file whose name equals *name*, or None."""
+        for f in self.output_dir.rglob('*'):
+            if f.is_file() and f.name == name:
+                return f
+        return None
+
+    def _read_tags(self, filename: str, tags: list) -> dict:
+        """Locate *filename* in the output tree, read ExifTool tags, return tag dict."""
+        path = self._find_output_file(filename)
+        self.assertIsNotNone(path, f"Output file not found: {filename!r}")
+        # encoding='utf-8' prevents cp1252 decode errors on Windows for non-ASCII tags
+        with exiftool.ExifToolHelper(encoding='utf-8') as et:
+            results = et.get_tags([str(path)], tags)
+        return results[0] if results else {}
+
+    # ------------------------------------------------------------------
+    # Category 3 — GPS (4 quadrants + altitude)
+    # ------------------------------------------------------------------
+
+    # (lat_ref, lon_ref, abs_lat, abs_lon, above_sea_level)
+    _GPS_CASES: dict = {
+        'gps_ne.jpg':                ('N', 'E', 38.91,  121.60, True),
+        'gps_nw.jpg':                ('N', 'W', 48.85,    2.35, True),
+        'gps_se.jpg':                ('S', 'E', 25.82,   28.20, True),
+        'gps_sw.jpg':                ('S', 'W', 33.86,   70.67, True),
+        'gps_altitude_negative.jpg': ('S', 'E', 25.82,   28.20, False),
+        'gps_high_altitude.jpg':     ('S', 'E', 25.82,   28.20, True),
+    }
+
+    # ExifTool may return the raw byte value OR the human-readable translation.
+    _ALT_REF_ABOVE = frozenset({'0', 'Above Sea Level'})
+    _ALT_REF_BELOW = frozenset({'1', 'Below Sea Level'})
+
+    _GPS_TAGS = [
+        'EXIF:GPSLatitude', 'EXIF:GPSLatitudeRef',
+        'EXIF:GPSLongitude', 'EXIF:GPSLongitudeRef',
+        'EXIF:GPSAltitude',  'EXIF:GPSAltitudeRef',
+    ]
+
+    def _assert_gps(self, filename: str, lat_ref: str, lon_ref: str,
+                    abs_lat: float, abs_lon: float, above_sea_level: bool) -> None:
+        tags = self._read_tags(filename, self._GPS_TAGS)
+
+        # Hemisphere refs
+        self.assertEqual(tags.get('EXIF:GPSLatitudeRef'),  lat_ref,
+                         f"{filename}: wrong GPSLatitudeRef")
+        self.assertEqual(tags.get('EXIF:GPSLongitudeRef'), lon_ref,
+                         f"{filename}: wrong GPSLongitudeRef")
+
+        # Absolute coordinate values (stored as EXIF rationals → float)
+        lat_val = tags.get('EXIF:GPSLatitude')
+        lon_val = tags.get('EXIF:GPSLongitude')
+        self.assertIsNotNone(lat_val, f"{filename}: EXIF:GPSLatitude missing")
+        self.assertIsNotNone(lon_val, f"{filename}: EXIF:GPSLongitude missing")
+        self.assertAlmostEqual(float(lat_val), abs_lat, places=3,
+                               msg=f"{filename}: GPSLatitude magnitude mismatch")
+        self.assertAlmostEqual(float(lon_val), abs_lon, places=3,
+                               msg=f"{filename}: GPSLongitude magnitude mismatch")
+
+        # Altitude reference — ExifTool may return raw byte ('0'/'1') or translated text
+        expected_refs = self._ALT_REF_ABOVE if above_sea_level else self._ALT_REF_BELOW
+        alt_ref = str(tags.get('EXIF:GPSAltitudeRef', ''))
+        self.assertIn(alt_ref, expected_refs,
+                      f"{filename}: unexpected GPSAltitudeRef {alt_ref!r}")
+
+    def test_gps_northeast(self) -> None:
+        """NE quadrant (+lat, +lon) → LatRef=N, LonRef=E."""
+        self._assert_gps('gps_ne.jpg', 'N', 'E', 38.91, 121.60, True)
+
+    def test_gps_northwest(self) -> None:
+        """NW quadrant (+lat, -lon) → LatRef=N, LonRef=W."""
+        self._assert_gps('gps_nw.jpg', 'N', 'W', 48.85, 2.35, True)
+
+    def test_gps_southeast(self) -> None:
+        """SE quadrant (-lat, +lon) → LatRef=S, LonRef=E."""
+        self._assert_gps('gps_se.jpg', 'S', 'E', 25.82, 28.20, True)
+
+    def test_gps_southwest(self) -> None:
+        """SW quadrant (-lat, -lon) → LatRef=S, LonRef=W."""
+        self._assert_gps('gps_sw.jpg', 'S', 'W', 33.86, 70.67, True)
+
+    def test_gps_negative_altitude(self) -> None:
+        """Altitude below sea level → GPSAltitudeRef = 1 (Below Sea Level)."""
+        self._assert_gps('gps_altitude_negative.jpg', 'S', 'E', 25.82, 28.20, False)
+
+    def test_gps_high_altitude(self) -> None:
+        """High altitude (1623.44 m) → GPSAltitudeRef = 0 (Above Sea Level)."""
+        tags = self._read_tags('gps_high_altitude.jpg',
+                               ['EXIF:GPSAltitude', 'EXIF:GPSAltitudeRef'])
+        alt_val = tags.get('EXIF:GPSAltitude')
+        self.assertIsNotNone(alt_val, "EXIF:GPSAltitude missing for gps_high_altitude.jpg")
+        self.assertAlmostEqual(float(alt_val), 1623.44, places=1,
+                               msg="GPSAltitude value mismatch")
+        self.assertIn(str(tags.get('EXIF:GPSAltitudeRef', '')), self._ALT_REF_ABOVE)
+
+    def test_gps_consistency(self) -> None:
+        """GPSLatitudeRef and GPSLongitudeRef are correct for every GPS test file."""
+        for filename, (lat_ref, lon_ref, *_) in self._GPS_CASES.items():
+            with self.subTest(file=filename):
+                tags = self._read_tags(filename,
+                                       ['EXIF:GPSLatitudeRef', 'EXIF:GPSLongitudeRef'])
+                self.assertEqual(tags.get('EXIF:GPSLatitudeRef'),  lat_ref)
+                self.assertEqual(tags.get('EXIF:GPSLongitudeRef'), lon_ref)
+
+    # ------------------------------------------------------------------
+    # Category 4 — Timezones
+    # ------------------------------------------------------------------
+
+    # epoch 1723113846 = 2024-08-08 10:44:06 UTC
+    # expected (OffsetTimeOriginal, DateTimeOriginal in local time)
+    _TZ_CASES: dict = {
+        'tz_utc.jpg':     ('+00:00', '2024:08:08 10:44:06'),
+        'tz_gmt2.jpg':    ('+02:00', '2024:08:08 12:44:06'),
+        'tz_minus5.jpg':  ('-05:00', '2024:08:08 05:44:06'),
+        'tz_plus8.jpg':   ('+08:00', '2024:08:08 18:44:06'),
+        'tz_plus530.jpg': ('+05:30', '2024:08:08 16:14:06'),
+    }
+
+    _TZ_TAGS = ['EXIF:DateTimeOriginal', 'EXIF:OffsetTimeOriginal']
+
+    def _assert_timezone(self, filename: str, expected_offset: str,
+                         expected_dt: str) -> None:
+        tags = self._read_tags(filename, self._TZ_TAGS)
+        self.assertEqual(tags.get('EXIF:DateTimeOriginal'), expected_dt,
+                         f"{filename}: wrong DateTimeOriginal")
+        self.assertEqual(tags.get('EXIF:OffsetTimeOriginal'), expected_offset,
+                         f"{filename}: wrong OffsetTimeOriginal")
+
+    def test_timezone_utc(self) -> None:
+        """UTC±00:00 → DateTimeOriginal=10:44:06, OffsetTimeOriginal=+00:00."""
+        self._assert_timezone('tz_utc.jpg', '+00:00', '2024:08:08 10:44:06')
+
+    def test_timezone_gmt_plus_2(self) -> None:
+        """GMT+02:00 → DateTimeOriginal=12:44:06, OffsetTimeOriginal=+02:00."""
+        self._assert_timezone('tz_gmt2.jpg', '+02:00', '2024:08:08 12:44:06')
+
+    def test_timezone_gmt_minus_5(self) -> None:
+        """GMT-05:00 → DateTimeOriginal=05:44:06, OffsetTimeOriginal=-05:00."""
+        self._assert_timezone('tz_minus5.jpg', '-05:00', '2024:08:08 05:44:06')
+
+    def test_timezone_gmt_plus_8(self) -> None:
+        """GMT+08:00 → DateTimeOriginal=18:44:06, OffsetTimeOriginal=+08:00."""
+        self._assert_timezone('tz_plus8.jpg', '+08:00', '2024:08:08 18:44:06')
+
+    def test_timezone_gmt_plus_530(self) -> None:
+        """GMT+05:30 → DateTimeOriginal=16:14:06, OffsetTimeOriginal=+05:30."""
+        self._assert_timezone('tz_plus530.jpg', '+05:30', '2024:08:08 16:14:06')
+
+    def test_timezone_fallback_gmt2(self) -> None:
+        """No EXIF timezone → merger falls back to GMT+02:00."""
+        self._assert_timezone('photo_basic.jpg', '+02:00', '2024:08:08 12:44:06')
+
+    # ------------------------------------------------------------------
+    # Category 5 — Descriptions
+    # ------------------------------------------------------------------
+
+    _DESC_TAGS = ['EXIF:ImageDescription', 'XMP:Description', 'EXIF:UserComment']
+
+    def test_description_utf8_chars(self) -> None:
+        """UTF-8 characters (CJK, accented Latin) survive round-trip in XMP:Description."""
+        tags = self._read_tags('desc_utf8.jpg', self._DESC_TAGS)
+        xmp = tags.get('XMP:Description', '')
+        self.assertIn('郭恒',   xmp, "CJK characters lost in XMP:Description")
+        self.assertIn('Timoné', xmp, "Accented character lost in XMP:Description")
+
+    def test_description_escaped_chars(self) -> None:
+        """Quotes and backticks are written verbatim (no extra escaping)."""
+        tags = self._read_tags('desc_escaped.jpg', self._DESC_TAGS)
+        desc = tags.get('EXIF:ImageDescription') or tags.get('XMP:Description', '')
+        self.assertIn('"hello"',   desc)
+        self.assertIn('`goodbye`', desc)
+
+    def test_description_newline(self) -> None:
+        r"""Newline (\n) is stored as an actual line break via ExifTool -E + &#xa;."""
+        tags = self._read_tags('desc_newline.jpg', self._DESC_TAGS)
+        desc = tags.get('EXIF:ImageDescription') or tags.get('XMP:Description', '')
+        self.assertIn('Line one', desc, "First line missing from description")
+        self.assertIn('Line two', desc, "Second line missing from description")
+        self.assertIn('\n', desc, r"Newline (\n) not stored in description")
+
+    def test_description_crlf(self) -> None:
+        r"""CRLF (\r\n) description: both lines survive the round-trip."""
+        tags = self._read_tags('desc_crlf.jpg', self._DESC_TAGS)
+        desc = tags.get('EXIF:ImageDescription') or tags.get('XMP:Description', '')
+        self.assertIn('Line one', desc, "First line missing from CRLF description")
+        self.assertIn('Line two', desc, "Second line missing from CRLF description")
+
+    def test_description_empty(self) -> None:
+        """Empty JSON description → no description tags written to output file."""
+        tags = self._read_tags('desc_empty.jpg', self._DESC_TAGS)
+        for tag in ('EXIF:ImageDescription', 'XMP:Description'):
+            val = tags.get(tag)
+            self.assertFalse(val, f"Expected absent/empty {tag}, got: {val!r}")
+
+    def test_description_blocked_cleared(self) -> None:
+        """'SONY DSC' is in blocked list → all description tags cleared in output."""
+        tags = self._read_tags('desc_blocked.jpg', self._DESC_TAGS)
+        for tag in ('EXIF:ImageDescription', 'XMP:Description', 'EXIF:UserComment'):
+            val = tags.get(tag)
+            self.assertFalse(val, f"{tag} not cleared for blocked description: {val!r}")
+
+    def test_description_long(self) -> None:
+        """500-character description is written without truncation to XMP:Description."""
+        tags = self._read_tags('desc_long.jpg', self._DESC_TAGS)
+        xmp = tags.get('XMP:Description', '')
+        self.assertGreaterEqual(len(xmp), 500,
+                                f"XMP:Description truncated: len={len(xmp)}, expected ≥500")
+
+    # ------------------------------------------------------------------
+    # Category 6 — File Types (matched)
+    # ------------------------------------------------------------------
+
+    # Expected DateTimeOriginal for FileTypes/Matched files:
+    # epoch 1723113846 = 2024-08-08 10:44:06 UTC → +02:00 fallback → 12:44:06 local
+    _FILETYPE_EXPECTED_DT = '2024:08:08 12:44:06'
+
+    def _assert_file_exists(self, stem: str, ext: str) -> Path:
+        filename = f'{stem}{ext}'
+        path = self._find_output_file(filename)
+        self.assertIsNotNone(path, f"Output file not found: {filename!r}")
+        return path  # type: ignore[return-value]
+
+    def _assert_exif_date(self, stem: str, ext: str) -> None:
+        filename = f'{stem}{ext}'
+        tags = self._read_tags(filename, ['EXIF:DateTimeOriginal'])
+        self.assertEqual(tags.get('EXIF:DateTimeOriginal'), self._FILETYPE_EXPECTED_DT,
+                         f"{filename}: EXIF:DateTimeOriginal mismatch")
+
+    def test_matched_jpg(self) -> None:
+        """JPG: direct write — output exists and EXIF:DateTimeOriginal is set."""
+        self._assert_file_exists('test', '.jpg')
+        self._assert_exif_date('test', '.jpg')
+
+    def test_matched_jpeg(self) -> None:
+        """JPEG: direct write — output exists and EXIF:DateTimeOriginal is set."""
+        self._assert_file_exists('test', '.jpeg')
+        self._assert_exif_date('test', '.jpeg')
+
+    def test_matched_png(self) -> None:
+        """PNG: partial-write strategy — output exists."""
+        self._assert_file_exists('test', '.png')
+
+    def test_matched_gif(self) -> None:
+        """GIF: partial-write strategy — output exists."""
+        self._assert_file_exists('test', '.gif')
+
+    def test_matched_tiff(self) -> None:
+        """TIFF: direct write — output exists and EXIF:DateTimeOriginal is set."""
+        self._assert_file_exists('test', '.tiff')
+        self._assert_exif_date('test', '.tiff')
+
+    def test_matched_mp4(self) -> None:
+        """MP4: video-with-sidecar strategy — output exists."""
+        self._assert_file_exists('test', '.mp4')
+
+    def test_matched_mov(self) -> None:
+        """MOV: video-with-sidecar strategy — output exists."""
+        self._assert_file_exists('test', '.mov')
+
+    def test_matched_avi(self) -> None:
+        """AVI: video-with-sidecar strategy — output exists."""
+        self._assert_file_exists('test', '.avi')
+
+    def test_matched_mkv(self) -> None:
+        """MKV: video-with-sidecar strategy (fallback copy) — output exists."""
+        self._assert_file_exists('test', '.mkv')
+
+    def test_matched_webm(self) -> None:
+        """WEBM: video-with-sidecar strategy (fallback copy) — output exists."""
+        self._assert_file_exists('test', '.webm')
+
+    def test_matched_heic(self) -> None:
+        """HEIC: direct write strategy — output exists."""
+        self._assert_file_exists('test', '.heic')
+
+    def test_matched_dng(self) -> None:
+        """DNG: direct write — output exists and EXIF:DateTimeOriginal is set."""
+        self._assert_file_exists('test', '.dng')
+        self._assert_exif_date('test', '.dng')
+
+    # ------------------------------------------------------------------
+    # Category 7 — Orphan Files
+    # ------------------------------------------------------------------
+
+    _ORPHAN_NAMES = [
+        'orphan_no_json.jpg',   # RootLevel — has no matching JSON
+        'orphan.jpg',           # FileTypes/Orphans
+        'orphan.png',
+        'orphan.gif',
+        'orphan.mp4',
+        'orphan.mov',
+        'orphan.avi',
+    ]
+
+    def test_orphan_copied_to_output(self) -> None:
+        """Every orphan (no JSON match) must appear in the output tree."""
+        output_names = {f.name for f in self.output_dir.rglob('*') if f.is_file()}
+        missing = [n for n in self._ORPHAN_NAMES if n not in output_names]
+        self.assertFalse(missing, f"Orphan files missing from output: {missing}")
+
+    def test_orphan_no_json_metadata(self) -> None:
+        """Orphan outputs must not have any GPS tags (no JSON data source)."""
+        gps_tags = ['EXIF:GPSLatitudeRef', 'EXIF:GPSLongitudeRef']
+        for name in self._ORPHAN_NAMES:
+            with self.subTest(file=name):
+                tags = self._read_tags(name, gps_tags)
+                self.assertIsNone(
+                    tags.get('EXIF:GPSLatitudeRef'),
+                    f"{name}: unexpected GPS data in orphan output",
+                )
+
+    def test_orphan_date_from_filesystem(self) -> None:
+        """Orphan output is placed under YYYY/MM/ matching the input file's ctime (GMT+02:00)."""
+        from datetime import timezone, timedelta
+        gmt2 = timezone(timedelta(hours=2))
+        src = self.input_dir / 'RootLevel' / 'orphan_no_json.jpg'
+        expected_dt    = __import__('datetime').datetime.fromtimestamp(src.stat().st_ctime, tz=gmt2)
+        expected_year  = expected_dt.strftime('%Y')
+        expected_month = expected_dt.strftime('%m')
+
+        out = self._find_output_file('orphan_no_json.jpg')
+        self.assertIsNotNone(out, "orphan_no_json.jpg not found in output")
+        parts = out.relative_to(self.output_dir).parts  # ('YYYY', 'MM', 'filename')
+        self.assertEqual(parts[0], expected_year,
+                         f"Orphan in wrong year: got {parts[0]!r}, expected {expected_year!r}")
+        self.assertEqual(parts[1], expected_month,
+                         f"Orphan in wrong month: got {parts[1]!r}, expected {expected_month!r}")
+
+    # ------------------------------------------------------------------
     # tearDownClass
     # ------------------------------------------------------------------
 
