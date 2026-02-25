@@ -355,6 +355,30 @@ def _make_jpeg_with_exif_tz(offset: str) -> bytes:
     return b'\xFF\xD8' + app1 + _jpeg_body() + b'\xFF\xD9'
 
 
+def _make_jpeg_with_offset_time(offset: str) -> bytes:
+    """JPEG with EXIF OffsetTime (0x9010) — exercises the EXIF:OffsetTime fallback branch.
+
+    Unlike _make_jpeg_with_exif_tz which embeds OffsetTimeOriginal (0x9011),
+    this variant uses the secondary offset tag so that the merger's
+    _resolve_dates_and_paths falls through to the OffsetTime check.
+    """
+    value = (offset + '\x00').encode('ascii')   # e.g. b'+03:00\x00' (7 bytes)
+    count = len(value)
+
+    tiff  = b'II' + struct.pack('<H', 42) + struct.pack('<I', 8)   # TIFF header
+    tiff += struct.pack('<H', 1)
+    tiff += struct.pack('<HHII', 0x8769, 4, 1, 26)                 # ExifIFD ptr
+    tiff += struct.pack('<I', 0)                                   # IFD0 next = 0
+    tiff += struct.pack('<H', 1)
+    tiff += struct.pack('<HHII', 0x9010, 2, count, 44)             # OffsetTime
+    tiff += struct.pack('<I', 0)                                   # ExifIFD next = 0
+    tiff += value
+
+    app1_body = b'Exif\x00\x00' + tiff
+    app1 = b'\xFF\xE1' + struct.pack('>H', 2 + len(app1_body)) + app1_body
+    return b'\xFF\xD8' + app1 + _jpeg_body() + b'\xFF\xD9'
+
+
 # ---------------------------------------------------------------------------
 # Pre-built byte sequences (computed once at import time)
 # ---------------------------------------------------------------------------
@@ -568,6 +592,12 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             p.write_bytes(_make_jpeg_with_exif_tz(offset))
             make_json_file(d / f'{stem}.jpg.json')
 
+        # OffsetTime fallback: embed OffsetTime (0x9010) instead of OffsetTimeOriginal (0x9011)
+        # so the merger's secondary tz-lookup branch is exercised.
+        ot_path = d / 'tz_offset_time.jpg'
+        ot_path.write_bytes(_make_jpeg_with_offset_time('+03:00'))
+        make_json_file(d / 'tz_offset_time.jpg.json')
+
         # ── Descriptions ───────────────────────────────────────────────────
         d = inp / 'Descriptions'
         _desc_cases = [
@@ -587,7 +617,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         # One file per supported extension, each paired with a JSON.
         d = inp / 'FileTypes' / 'Matched'
         for ext in ('.jpg', '.jpeg', '.png', '.gif', '.tiff',
-                    '.mp4', '.mov', '.avi', '.mkv', '.webm', '.heic', '.dng'):
+                    '.mp4', '.mov', '.avi', '.mkv', '.webm', '.heic', '.dng', '.cr2'):
             make_media_file(d / f'test{ext}')
             make_json_file(d / f'test{ext}.json')
 
@@ -636,6 +666,17 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         make_media_file(d / 'photo(1711).jpg')
         make_json_file(d / 'photo(1711).jpg.json',
                        title='photo(1711).jpg')
+
+        # Uppercase extension — merger must normalise .JPG → .jpg in output title
+        make_media_file(d / 'UPPERCASE.JPG')
+        make_json_file(d / 'UPPERCASE.JPG.json',
+                       title='UPPERCASE.JPG')
+
+        # ── Deep File (depth > 2 — should be skipped by the merger) ────────────
+        # Files more than 2 levels deep are ignored by _scan_files.  This file must
+        # NOT appear in the output tree.
+        deep_dir = inp / 'Deep' / 'Level1' / 'Level2'
+        make_media_file(deep_dir / 'deep.jpg')
 
         # ── Sidecars ───────────────────────────────────────────────────────
         # Dedicated files with unique stems to avoid the stem collision that
@@ -736,6 +777,11 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             "Files not in valid YYYY/MM/ structure:\n  " + "\n  ".join(bad),
         )
 
+    def test_deep_file_not_in_output(self) -> None:
+        """Files more than 2 directory levels deep are skipped by the scanner."""
+        self.assertIsNone(self._find_output_file('deep.jpg'),
+                          "deep.jpg (depth 3) must not appear in output")
+
     def test_all_media_files_in_output(self) -> None:
         """Every expected output filename must exist somewhere in the output tree."""
         output_names = {f.name for f in self.output_dir.rglob('*') if f.is_file()}
@@ -758,7 +804,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             # FileTypes / Matched (title = "test.<ext>")
             'test.jpg', 'test.jpeg', 'test.png', 'test.gif', 'test.tiff',
             'test.mp4', 'test.mov', 'test.avi', 'test.mkv', 'test.webm',
-            'test.heic', 'test.dng',
+            'test.heic', 'test.dng', 'test.cr2',
             # FileTypes / Orphans (no JSON → copied with original name)
             'orphan.jpg', 'orphan.png', 'orphan.gif',
             'orphan.mp4', 'orphan.mov', 'orphan.avi',
@@ -768,10 +814,13 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             # BracketNotation — photo(1) and photo(2) both have title='photo.jpg';
             # first keeps photo.jpg, second is renamed photo_2.jpg.
             'photo.jpg', 'photo_2.jpg',
+            # Timezones (OffsetTime fallback)
+            'tz_offset_time.jpg',
             # SpecialChars
             'Kosi Bay - 2014 - 179.jpg',
             '_DSC5757-Enhanced-NR - Kruger.jpg',
             'photo(1711).jpg',
+            'UPPERCASE.jpg',   # extension normalised to lowercase in output
             # Sidecars
             'sc_png.png', 'sc_gif.gif', 'sc_avi.avi',
         ]
@@ -891,6 +940,12 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                 self.assertEqual(tags.get('EXIF:GPSLatitudeRef'),  lat_ref)
                 self.assertEqual(tags.get('EXIF:GPSLongitudeRef'), lon_ref)
 
+    def test_gps_zero_coordinates_no_tags(self) -> None:
+        """JSON with lat=0.0, lon=0.0 → _resolve_gps returns None → no GPS tags written."""
+        tags = self._read_tags('photo_basic.jpg', ['EXIF:GPSLatitudeRef'])
+        self.assertIsNone(tags.get('EXIF:GPSLatitudeRef'),
+                          "photo_basic.jpg should have no GPS tags (lat=0, lon=0 in JSON)")
+
     # ------------------------------------------------------------------
     # Category 4 — Timezones
     # ------------------------------------------------------------------
@@ -938,6 +993,10 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     def test_timezone_fallback_gmt2(self) -> None:
         """No EXIF timezone → merger falls back to GMT+02:00."""
         self._assert_timezone('photo_basic.jpg', '+02:00', '2024:08:08 12:44:06')
+
+    def test_timezone_offsettime_fallback(self) -> None:
+        """EXIF:OffsetTime (+03:00, no OffsetTimeOriginal) → DateTimeOriginal=13:44:06."""
+        self._assert_timezone('tz_offset_time.jpg', '+03:00', '2024:08:08 13:44:06')
 
     # ------------------------------------------------------------------
     # Category 5 — Descriptions
@@ -1059,13 +1118,24 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self._assert_file_exists('test', '.webm')
 
     def test_matched_heic(self) -> None:
-        """HEIC: direct write strategy — output exists."""
+        """HEIC: direct write strategy — output exists and a date tag is set."""
         self._assert_file_exists('test', '.heic')
+        tags = self._read_tags('test.heic',
+                               ['EXIF:DateTimeOriginal', 'XMP:DateTimeOriginal'])
+        dt = tags.get('EXIF:DateTimeOriginal') or tags.get('XMP:DateTimeOriginal')
+        self.assertIsNotNone(dt, "test.heic: no DateTimeOriginal in EXIF or XMP")
+        self.assertEqual(dt, self._FILETYPE_EXPECTED_DT,
+                         f"test.heic: DateTimeOriginal mismatch: {dt!r}")
 
     def test_matched_dng(self) -> None:
         """DNG: direct write — output exists and EXIF:DateTimeOriginal is set."""
         self._assert_file_exists('test', '.dng')
         self._assert_exif_date('test', '.dng')
+
+    def test_matched_cr2(self) -> None:
+        """CR2: direct write — output exists and EXIF:DateTimeOriginal is set."""
+        self._assert_file_exists('test', '.cr2')
+        self._assert_exif_date('test', '.cr2')
 
     # ------------------------------------------------------------------
     # Category 7 — Orphan Files
@@ -1136,6 +1206,14 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         """AVI uses VIDEO_WITH_SIDECAR strategy → sc_avi.xmp must exist in output."""
         xmp = self._find_output_file('sc_avi.xmp')
         self.assertIsNotNone(xmp, "sc_avi.xmp not found in output")
+
+    def test_xmp_sidecar_png_contains_gps(self) -> None:
+        """sc_png.xmp contains GPS coordinates written from sc_png.png JSON geoData."""
+        tags = self._read_tags('sc_png.xmp', ['XMP:GPSLatitude', 'XMP:GPSLongitude'])
+        self.assertIsNotNone(tags.get('XMP:GPSLatitude'),
+                             "sc_png.xmp missing XMP:GPSLatitude")
+        self.assertIsNotNone(tags.get('XMP:GPSLongitude'),
+                             "sc_png.xmp missing XMP:GPSLongitude")
 
     def test_xmp_sidecar_contains_dates(self) -> None:
         """XMP sidecar contains XMP:DateTimeOriginal (or XMP:CreateDate) from JSON timestamp."""
@@ -1249,23 +1327,27 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # ------------------------------------------------------------------
     # Category 12 — Stats Verification
     # ------------------------------------------------------------------
-    # Counts derivation (after adding photo(1711).jpg to SpecialChars):
-    #   total=48  (41 matched + 7 orphans)
-    #   matched=41 (all dirs except FileTypes/Orphans + orphan_no_json)
+    # Counts derivation:
+    #   total=51  (44 matched + 7 orphans)
+    #   matched=44 (all dirs except FileTypes/Orphans + orphan_no_json;
+    #               includes test.cr2, tz_offset_time.jpg, UPPERCASE.JPG)
     #   orphans=7  (orphan_no_json + 6 × FileTypes/Orphans)
     #   gps=8      (6 GPS Tests + sc_png + sc_avi)
     #   sidecars=4 (sc_png.xmp + sc_gif.xmp + sc_avi.xmp + test.xmp via AVI)
+    #   descriptions_cleared=1  (desc_blocked.jpg)
+    #   duplicates_renamed=2    (same_name_b → same_name_2, photo(2) → photo_2)
+    #   written=51
     #   errors=0
 
     def test_stats_total_count(self) -> None:
-        """Total media files processed = 48."""
-        self.assertEqual(self.stats.total_media_files, 48,
-                         f"Expected 48 total, got {self.stats.total_media_files}")
+        """Total media files processed = 51."""
+        self.assertEqual(self.stats.total_media_files, 51,
+                         f"Expected 51 total, got {self.stats.total_media_files}")
 
     def test_stats_matched_count(self) -> None:
-        """Matched files (with JSON) = 41."""
-        self.assertEqual(self.stats.matched, 41,
-                         f"Expected 41 matched, got {self.stats.matched}")
+        """Matched files (with JSON) = 44."""
+        self.assertEqual(self.stats.matched, 44,
+                         f"Expected 44 matched, got {self.stats.matched}")
 
     def test_stats_orphan_count(self) -> None:
         """Orphan files (no JSON) = 7."""
@@ -1286,6 +1368,21 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         """Merger reports zero errors for well-formed test data."""
         self.assertEqual(self.stats.errors, 0,
                          f"Expected 0 errors, got {self.stats.errors}")
+
+    def test_stats_written_count(self) -> None:
+        """Files written = 51 (total_media_files when errors == 0)."""
+        self.assertEqual(self.stats.written, 51,
+                         f"Expected 51 written, got {self.stats.written}")
+
+    def test_stats_descriptions_cleared(self) -> None:
+        """descriptions_cleared = 1 (desc_blocked.jpg carries 'SONY DSC')."""
+        self.assertEqual(self.stats.descriptions_cleared, 1,
+                         f"Expected 1 description cleared, got {self.stats.descriptions_cleared}")
+
+    def test_stats_duplicates_renamed(self) -> None:
+        """duplicates_renamed = 2 (one from Duplicates/, one from BracketNotation/)."""
+        self.assertEqual(self.stats.duplicates_renamed, 2,
+                         f"Expected 2 duplicates renamed, got {self.stats.duplicates_renamed}")
 
     # ------------------------------------------------------------------
     # Category 13 — Video UTC Time
@@ -1336,6 +1433,16 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self.assertEqual(tags.get('EXIF:DateTimeOriginal'), '2024:08:08 12:44:06',
                          "photo(1711).jpg: EXIF:DateTimeOriginal mismatch")
 
+    def test_uppercase_extension(self) -> None:
+        """Uppercase extension (.JPG) is normalised to lowercase in the output filename."""
+        # The merger's _resolve_dates_and_paths lower-cases the extension in the output
+        # title, so UPPERCASE.JPG → UPPERCASE.jpg.
+        path = self._find_output_file('UPPERCASE.jpg')
+        self.assertIsNotNone(path, "UPPERCASE.jpg (normalised from .JPG) not found in output")
+        tags = self._read_tags('UPPERCASE.jpg', ['EXIF:DateTimeOriginal'])
+        self.assertEqual(tags.get('EXIF:DateTimeOriginal'), '2024:08:08 12:44:06',
+                         "UPPERCASE.jpg: EXIF:DateTimeOriginal mismatch")
+
     # ------------------------------------------------------------------
     # tearDownClass
     # ------------------------------------------------------------------
@@ -1380,7 +1487,7 @@ if __name__ == '__main__':
     _CATEGORIES: list[tuple[str, tuple[str, ...]]] = [
         ("Input Integrity",           ("test_input_files_",    "test_input_file_count_")),
         ("Output Structure",          ("test_no_json_",        "test_output_organ",
-                                       "test_all_media_")),
+                                       "test_all_media_",      "test_deep_")),
         ("GPS (4 quadrants + alt)",   ("test_gps_",)),
         ("Timezones",                 ("test_timezone_",)),
         ("Descriptions (UTF-8, etc)", ("test_description_",)),
@@ -1394,7 +1501,7 @@ if __name__ == '__main__':
         ("Stats Verification",        ("test_stats_",)),
         ("Video UTC Time",            ("test_mp4_time_",       "test_mov_time_")),
         ("Special Filenames",         ("test_spaces_",         "test_leading_",
-                                       "test_parentheses_")),
+                                       "test_parentheses_",    "test_uppercase_")),
     ]
 
     def _cat(name: str) -> str:
