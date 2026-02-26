@@ -619,11 +619,12 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         # The no-timezone fallback scenario is covered by photo_basic.jpg above.
         d = inp / 'Timezones'
         _tz_cases = [
-            ('tz_utc',    '+00:00'),
-            ('tz_gmt2',   '+02:00'),
-            ('tz_minus5', '-05:00'),
-            ('tz_plus8',  '+08:00'),
+            ('tz_utc',     '+00:00'),
+            ('tz_gmt2',    '+02:00'),
+            ('tz_minus5',  '-05:00'),
+            ('tz_plus8',   '+08:00'),
             ('tz_plus530', '+05:30'),
+            ('tz_minus930', '-09:30'),
         ]
         for stem, offset in _tz_cases:
             p = d / f'{stem}.jpg'
@@ -647,6 +648,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             ('desc_empty',   ''),
             ('desc_blocked', 'SONY DSC'),           # in _BLOCKED_DESCRIPTIONS → cleared
             ('desc_long',    'A' * 500),
+            ('desc_multiline',       'Line one\nLine two\nLine three\nLine four'),
+            ('desc_whitespace',      '   '),         # spaces only → treated as empty
+            ('desc_partial_blocked', 'SONY DSC Extended'),  # NOT blocked (exact match only)
         ]
         for stem, desc in _desc_cases:
             make_media_file(d / f'{stem}.jpg')
@@ -676,6 +680,14 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             make_json_file(
                 d / f'{stem}.jpg.json',
                 title='same_name.jpg',
+                photoTakenTime={'timestamp': _EPOCH_DEFAULT, 'formatted': ''},
+            )
+        # Video duplicates — verify that the renamed duplicate's sidecar is also renamed.
+        for stem in ('same_name_a', 'same_name_b'):
+            make_media_file(d / f'{stem}.mp4')
+            make_json_file(
+                d / f'{stem}.mp4.json',
+                title='same_video.mp4',
                 photoTakenTime={'timestamp': _EPOCH_DEFAULT, 'formatted': ''},
             )
 
@@ -841,10 +853,11 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             'gps_altitude_negative.jpg', 'gps_high_altitude.jpg',
             # Timezones
             'tz_utc.jpg', 'tz_gmt2.jpg', 'tz_minus5.jpg',
-            'tz_plus8.jpg', 'tz_plus530.jpg',
+            'tz_plus8.jpg', 'tz_plus530.jpg', 'tz_minus930.jpg',
             # Descriptions
             'desc_utf8.jpg', 'desc_escaped.jpg', 'desc_newline.jpg',
             'desc_crlf.jpg', 'desc_empty.jpg', 'desc_blocked.jpg', 'desc_long.jpg',
+            'desc_multiline.jpg', 'desc_whitespace.jpg', 'desc_partial_blocked.jpg',
             # FileTypes / Matched (title = "test.<ext>")
             'test.jpg', 'test.jpeg', 'test.png', 'test.gif', 'test.tiff', 'test.tif',
             'test.mp4', 'test.mov', 'test.avi', 'test.mkv', 'test.webm',
@@ -855,6 +868,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             # Duplicates — both same_name_a/.._b carry title='same_name.jpg';
             # first copy keeps same_name.jpg, second is renamed same_name_2.jpg.
             'same_name.jpg', 'same_name_2.jpg',
+            # Video duplicates — both same_name_a/.._b carry title='same_video.mp4';
+            # first copy keeps same_video.mp4, second is renamed same_video_2.mp4.
+            'same_video.mp4', 'same_video_2.mp4',
             # BracketNotation — photo(1) and photo(2) both have title='photo.jpg';
             # first keeps photo.jpg, second is renamed photo_2.jpg.
             'photo.jpg', 'photo_2.jpg',
@@ -997,11 +1013,12 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # epoch 1723113846 = 2024-08-08 10:44:06 UTC
     # expected (OffsetTimeOriginal, DateTimeOriginal in local time)
     _TZ_CASES: dict = {
-        'tz_utc.jpg':     ('+00:00', '2024:08:08 10:44:06'),
-        'tz_gmt2.jpg':    ('+02:00', '2024:08:08 12:44:06'),
-        'tz_minus5.jpg':  ('-05:00', '2024:08:08 05:44:06'),
-        'tz_plus8.jpg':   ('+08:00', '2024:08:08 18:44:06'),
-        'tz_plus530.jpg': ('+05:30', '2024:08:08 16:14:06'),
+        'tz_utc.jpg':      ('+00:00', '2024:08:08 10:44:06'),
+        'tz_gmt2.jpg':     ('+02:00', '2024:08:08 12:44:06'),
+        'tz_minus5.jpg':   ('-05:00', '2024:08:08 05:44:06'),
+        'tz_plus8.jpg':    ('+08:00', '2024:08:08 18:44:06'),
+        'tz_plus530.jpg':  ('+05:30', '2024:08:08 16:14:06'),
+        'tz_minus930.jpg': ('-09:30', '2024:08:08 01:14:06'),
     }
 
     _TZ_TAGS = ['EXIF:DateTimeOriginal', 'EXIF:OffsetTimeOriginal']
@@ -1042,11 +1059,53 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         """EXIF:OffsetTime (+03:00, no OffsetTimeOriginal) → DateTimeOriginal=13:44:06."""
         self._assert_timezone('tz_offset_time.jpg', '+03:00', '2024:08:08 13:44:06')
 
+    def test_timezone_minus_930(self) -> None:
+        """GMT-09:30 (rare half-hour offset) → DateTimeOriginal=01:14:06, OffsetTimeOriginal=-09:30."""
+        self._assert_timezone('tz_minus930.jpg', '-09:30', '2024:08:08 01:14:06')
+
+    def test_timezone_consistency(self) -> None:
+        """DateTimeOriginal and OffsetTimeOriginal are correct for every timezone test file."""
+        for filename, (expected_offset, expected_dt) in self._TZ_CASES.items():
+            with self.subTest(file=filename):
+                self._assert_timezone(filename, expected_offset, expected_dt)
+
     # ------------------------------------------------------------------
     # Category 5 — Descriptions
     # ------------------------------------------------------------------
 
     _DESC_TAGS = ['EXIF:ImageDescription', 'XMP:Description', 'EXIF:UserComment']
+
+    # 'present' → at least one desc tag has the substring (or any value if substring is None)
+    # 'absent'  → all desc tags are falsy (empty / missing)
+    _DESC_CASES: dict = {
+        'desc_utf8.jpg':            ('present', '郭恒'),
+        'desc_escaped.jpg':         ('present', '"hello"'),
+        'desc_newline.jpg':         ('present', 'Line one'),
+        'desc_crlf.jpg':            ('present', 'Line one'),
+        'desc_multiline.jpg':       ('present', 'Line three'),
+        'desc_empty.jpg':           ('absent',  None),
+        'desc_whitespace.jpg':      ('absent',  None),
+        'desc_blocked.jpg':         ('absent',  None),
+        'desc_long.jpg':            ('present', None),
+        'desc_partial_blocked.jpg': ('present', 'SONY DSC Extended'),
+    }
+
+    def _assert_description(self, filename: str, state: str,
+                            substring: 'str | None' = None) -> None:
+        """Assert that the output file's description tags match the expected state."""
+        tags = self._read_tags(filename, self._DESC_TAGS)
+        all_values = [tags.get(t) for t in self._DESC_TAGS]
+        if state == 'absent':
+            for tag, val in zip(self._DESC_TAGS, all_values):
+                self.assertFalse(val,
+                                 f"{filename}: expected absent {tag}, got {val!r}")
+        else:  # 'present'
+            combined = ' '.join(str(v) for v in all_values if v)
+            self.assertTrue(combined.strip(),
+                            f"{filename}: all description tags are empty/missing")
+            if substring is not None:
+                self.assertIn(substring, combined,
+                              f"{filename}: substring {substring!r} not found in {combined!r}")
 
     def test_description_utf8_chars(self) -> None:
         """UTF-8 characters (CJK, accented Latin) survive round-trip in XMP:Description."""
@@ -1071,11 +1130,13 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self.assertIn('\n', desc, r"Newline (\n) not stored in description")
 
     def test_description_crlf(self) -> None:
-        r"""CRLF (\r\n) description: both lines survive the round-trip."""
+        r"""CRLF (\r\n) description: both lines survive and CRLF is normalized to LF."""
         tags = self._read_tags('desc_crlf.jpg', self._DESC_TAGS)
         desc = tags.get('EXIF:ImageDescription') or tags.get('XMP:Description', '')
         self.assertIn('Line one', desc, "First line missing from CRLF description")
         self.assertIn('Line two', desc, "Second line missing from CRLF description")
+        self.assertNotIn('\r\n', desc, r"CRLF (\r\n) not normalized to LF in stored description")
+        self.assertIn('\n', desc, r"LF newline missing after CRLF normalization")
 
     def test_description_empty(self) -> None:
         """Empty JSON description → no description tags written to output file."""
@@ -1098,6 +1159,28 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self.assertGreaterEqual(len(xmp), 500,
                                 f"XMP:Description truncated: len={len(xmp)}, expected ≥500")
 
+    def test_description_multiline_all_lines_present(self) -> None:
+        """4-line description: all four lines survive the round-trip (no truncation at line 3/4)."""
+        tags = self._read_tags('desc_multiline.jpg', self._DESC_TAGS)
+        combined = ' '.join(str(v) for v in (tags.get(t) for t in self._DESC_TAGS) if v)
+        for line in ('Line one', 'Line two', 'Line three', 'Line four'):
+            self.assertIn(line, combined,
+                          f"desc_multiline.jpg: '{line}' missing from description")
+
+    def test_description_whitespace_only(self) -> None:
+        """Whitespace-only description is treated as empty → no description tags written."""
+        self._assert_description('desc_whitespace.jpg', 'absent')
+
+    def test_description_partial_blocked_not_cleared(self) -> None:
+        """'SONY DSC Extended' must NOT be cleared — exact match only blocks 'SONY DSC'."""
+        self._assert_description('desc_partial_blocked.jpg', 'present', 'SONY DSC Extended')
+
+    def test_description_consistency(self) -> None:
+        """Absent/present state and optional substring check for every description test file."""
+        for filename, (state, substring) in self._DESC_CASES.items():
+            with self.subTest(file=filename):
+                self._assert_description(filename, state, substring)
+
     # ------------------------------------------------------------------
     # Category 6 — File Types (matched)
     # ------------------------------------------------------------------
@@ -1105,6 +1188,24 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # Expected DateTimeOriginal for FileTypes/Matched files:
     # epoch 1723113846 = 2024-08-08 10:44:06 UTC → +02:00 fallback → 12:44:06 local
     _FILETYPE_EXPECTED_DT = '2024:08:08 12:44:06'
+
+    # (ext: (has_direct_exif_date, has_sidecar))
+    _FILETYPE_CASES: dict = {
+        '.jpg':  (True,  False),
+        '.jpeg': (True,  False),
+        '.tiff': (True,  False),
+        '.tif':  (True,  False),
+        '.dng':  (True,  False),
+        '.cr2':  (True,  False),
+        '.heic': (True,  False),
+        '.png':  (False, True),
+        '.gif':  (False, True),
+        '.mp4':  (False, True),
+        '.mov':  (False, True),
+        '.avi':  (False, True),
+        '.mkv':  (False, True),
+        '.webm': (False, True),
+    }
 
     def _assert_file_exists(self, stem: str, ext: str) -> Path:
         filename = f'{stem}{ext}'
@@ -1186,30 +1287,63 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self._assert_file_exists('test', '.cr2')
         self._assert_exif_date('test', '.cr2')
 
+    def test_filetype_consistency_exists(self) -> None:
+        """Every supported file type produces a test<ext> file in the output tree."""
+        for ext in self._FILETYPE_CASES:
+            with self.subTest(ext=ext):
+                self._assert_file_exists('test', ext)
+
+    def test_filetype_consistency_exif_date(self) -> None:
+        """File types with direct EXIF write have EXIF:DateTimeOriginal set."""
+        for ext, (has_direct_exif_date, _) in self._FILETYPE_CASES.items():
+            if has_direct_exif_date:
+                with self.subTest(ext=ext):
+                    if ext == '.heic':
+                        # HEIC may use XMP as fallback
+                        tags = self._read_tags(f'test{ext}',
+                                               ['EXIF:DateTimeOriginal', 'XMP:DateTimeOriginal'])
+                        dt = tags.get('EXIF:DateTimeOriginal') or tags.get('XMP:DateTimeOriginal')
+                        self.assertEqual(dt, self._FILETYPE_EXPECTED_DT,
+                                         f"test{ext}: DateTimeOriginal mismatch: {dt!r}")
+                    else:
+                        self._assert_exif_date('test', ext)
+
+    def test_filetype_consistency_sidecar_exists(self) -> None:
+        """File types that use a sidecar strategy must produce a test<ext>.xmp in output."""
+        for ext, (_, has_sidecar) in self._FILETYPE_CASES.items():
+            if has_sidecar:
+                with self.subTest(ext=ext):
+                    xmp_name = f'test{ext}.xmp'
+                    self.assertIsNotNone(
+                        self._find_output_file(xmp_name),
+                        f"{xmp_name} not found in output",
+                    )
+
     # ------------------------------------------------------------------
     # Category 7 — Orphan Files
     # ------------------------------------------------------------------
 
-    _ORPHAN_NAMES = [
-        'orphan_no_json.jpg',   # RootLevel — has no matching JSON
-        'orphan.jpg',           # FileTypes/Orphans
-        'orphan.png',
-        'orphan.gif',
-        'orphan.mp4',
-        'orphan.mov',
-        'orphan.avi',
+    # (filename, source_subdir) — source_subdir is relative to cls.input_dir
+    _ORPHAN_CASES: list = [
+        ('orphan_no_json.jpg',  'RootLevel'),
+        ('orphan.jpg',          'FileTypes/Orphans'),
+        ('orphan.png',          'FileTypes/Orphans'),
+        ('orphan.gif',          'FileTypes/Orphans'),
+        ('orphan.mp4',          'FileTypes/Orphans'),
+        ('orphan.mov',          'FileTypes/Orphans'),
+        ('orphan.avi',          'FileTypes/Orphans'),
     ]
 
     def test_orphan_copied_to_output(self) -> None:
         """Every orphan (no JSON match) must appear in the output tree."""
         output_names = {f.name for f in self.output_dir.rglob('*') if f.is_file()}
-        missing = [n for n in self._ORPHAN_NAMES if n not in output_names]
+        missing = [name for name, _ in self._ORPHAN_CASES if name not in output_names]
         self.assertFalse(missing, f"Orphan files missing from output: {missing}")
 
     def test_orphan_no_json_metadata(self) -> None:
         """Orphan outputs must not have any GPS tags (no JSON data source)."""
         gps_tags = ['EXIF:GPSLatitudeRef', 'EXIF:GPSLongitudeRef']
-        for name in self._ORPHAN_NAMES:
+        for name, _ in self._ORPHAN_CASES:
             with self.subTest(file=name):
                 tags = self._read_tags(name, gps_tags)
                 self.assertIsNone(
@@ -1234,11 +1368,56 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self.assertEqual(parts[1], expected_month,
                          f"Orphan in wrong month: got {parts[1]!r}, expected {expected_month!r}")
 
+    def test_orphan_consistency(self) -> None:
+        """Every orphan exists in output, has no GPS tags, and has no description tags."""
+        gps_tag  = 'EXIF:GPSLatitudeRef'
+        desc_tag = 'EXIF:ImageDescription'
+        xmp_tag  = 'XMP:Description'
+        for name, _ in self._ORPHAN_CASES:
+            with self.subTest(file=name):
+                out = self._find_output_file(name)
+                self.assertIsNotNone(out, f"Orphan {name!r} not found in output")
+                tags = self._read_tags(name, [gps_tag, desc_tag, xmp_tag])
+                self.assertIsNone(tags.get(gps_tag),
+                                  f"{name}: unexpected GPS tag in orphan output")
+                self.assertFalse(tags.get(desc_tag),
+                                 f"{name}: unexpected ImageDescription in orphan output")
+                self.assertFalse(tags.get(xmp_tag),
+                                 f"{name}: unexpected XMP:Description in orphan output")
+
+    def test_orphan_copy_fidelity(self) -> None:
+        """Orphan output bytes are byte-for-byte identical to the input (no modifications)."""
+        for name, subdir in self._ORPHAN_CASES:
+            with self.subTest(file=name):
+                src = self.input_dir / subdir / name
+                out = self._find_output_file(name)
+                self.assertIsNotNone(out, f"Orphan {name!r} not found in output")
+                self.assertEqual(
+                    src.read_bytes(), out.read_bytes(),
+                    f"{name}: output bytes differ from input (orphan should be unmodified)",
+                )
+
     # ------------------------------------------------------------------
     # Category 8 — XMP Sidecars
     # ------------------------------------------------------------------
     # Uses dedicated files in Sidecars/ (sc_png.png, sc_gif.gif, sc_avi.avi)
     # for sidecar content verification (GPS, description, timestamps).
+
+    # (sidecar_name: (has_gps, has_date, description_substring_or_None))
+    _SIDECAR_CASES: dict = {
+        # Dedicated Sidecars/ files
+        'sc_png.png.xmp':  (True,  True,  None),
+        'sc_gif.gif.xmp':  (False, True,  None),
+        'sc_avi.avi.xmp':  (True,  True,  'AVI sidecar test'),
+        # FileTypes/Matched — previously entirely untested
+        'test.png.xmp':    (False, True,  None),
+        'test.gif.xmp':    (False, True,  None),
+        'test.mp4.xmp':    (False, True,  None),
+        'test.mov.xmp':    (False, True,  None),
+        'test.avi.xmp':    (False, True,  None),
+        'test.mkv.xmp':    (False, True,  None),
+        'test.webm.xmp':   (False, True,  None),
+    }
 
     def test_xmp_sidecar_for_png(self) -> None:
         """PNG uses PARTIAL_WITH_SIDECAR strategy → sc_png.png.xmp must exist in output."""
@@ -1284,6 +1463,43 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self.assertIn('AVI sidecar test', desc,
                       f"sc_avi.avi.xmp XMP:Description mismatch: {desc!r}")
 
+    def test_sidecar_consistency_exists(self) -> None:
+        """Every expected XMP sidecar exists in the output tree."""
+        for sidecar_name in self._SIDECAR_CASES:
+            with self.subTest(sidecar=sidecar_name):
+                self.assertIsNotNone(
+                    self._find_output_file(sidecar_name),
+                    f"{sidecar_name} not found in output",
+                )
+
+    def test_sidecar_consistency_has_date(self) -> None:
+        """Every sidecar with has_date=True contains a date tag in its XMP."""
+        date_tags = ['XMP:DateTimeOriginal', 'XMP:CreateDate']
+        for sidecar_name, (_, has_date, _) in self._SIDECAR_CASES.items():
+            if has_date:
+                with self.subTest(sidecar=sidecar_name):
+                    tags = self._read_tags(sidecar_name, date_tags)
+                    dt = tags.get('XMP:DateTimeOriginal') or tags.get('XMP:CreateDate')
+                    self.assertIsNotNone(
+                        dt, f"{sidecar_name}: missing XMP:DateTimeOriginal / XMP:CreateDate",
+                    )
+
+    def test_sidecar_consistency_has_gps(self) -> None:
+        """Every sidecar with has_gps=True contains GPS coordinates in its XMP."""
+        gps_tags = ['XMP:GPSLatitude', 'XMP:GPSLongitude']
+        for sidecar_name, (has_gps, _, _) in self._SIDECAR_CASES.items():
+            if has_gps:
+                with self.subTest(sidecar=sidecar_name):
+                    tags = self._read_tags(sidecar_name, gps_tags)
+                    self.assertIsNotNone(
+                        tags.get('XMP:GPSLatitude'),
+                        f"{sidecar_name}: missing XMP:GPSLatitude",
+                    )
+                    self.assertIsNotNone(
+                        tags.get('XMP:GPSLongitude'),
+                        f"{sidecar_name}: missing XMP:GPSLongitude",
+                    )
+
     # ------------------------------------------------------------------
     # Category 9 — Duplicate Resolution
     # ------------------------------------------------------------------
@@ -1308,12 +1524,39 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                     f"{name}: EXIF:DateTimeOriginal not set correctly",
                 )
 
+    def test_duplicate_renamed_sidecar_exists(self) -> None:
+        """When a renamed duplicate is a video, its XMP sidecar is also renamed to match."""
+        # same_name_a.mp4 → same_video.mp4 + same_video.mp4.xmp
+        # same_name_b.mp4 → same_video_2.mp4 + same_video_2.mp4.xmp
+        self.assertIsNotNone(self._find_output_file('same_video.mp4'),
+                             "same_video.mp4 not found in output")
+        self.assertIsNotNone(self._find_output_file('same_video.mp4.xmp'),
+                             "same_video.mp4.xmp not found in output")
+        self.assertIsNotNone(self._find_output_file('same_video_2.mp4'),
+                             "same_video_2.mp4 (renamed duplicate) not found in output")
+        self.assertIsNotNone(self._find_output_file('same_video_2.mp4.xmp'),
+                             "same_video_2.mp4.xmp (renamed sidecar) not found in output")
+
+    def test_duplicate_exif_title(self) -> None:
+        """The renamed duplicate's XMP sidecar carries the new deduplicated title stem."""
+        tags = self._read_tags('same_video_2.mp4.xmp', ['XMP:Title'])
+        title = tags.get('XMP:Title', '')
+        # Title stem should reflect the renamed filename, not the original 'same_video'
+        self.assertIn('same_video_2', str(title),
+                      f"same_video_2.mp4.xmp XMP:Title does not reflect renamed stem: {title!r}")
+
     # ------------------------------------------------------------------
     # Category 10 — Bracket Notation
     # ------------------------------------------------------------------
     # photo.jpg(1).json and photo.jpg(2).json must each match their
     # corresponding photo(1).jpg / photo(2).jpg.  Both carry title='photo.jpg'
     # so the second output is renamed photo_2.jpg (same deduplication logic).
+
+    # (output_filename, expected_DateTimeOriginal)
+    _BRACKET_CASES: list = [
+        ('photo.jpg',   '2024:08:08 12:44:06'),
+        ('photo_2.jpg', '2024:08:08 12:44:06'),
+    ]
 
     def test_bracket_notation_match(self) -> None:
         """photo.jpg(1).json matched to photo(1).jpg → EXIF:DateTimeOriginal set."""
@@ -1330,9 +1573,42 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self.assertIsNotNone(self._find_output_file('photo_2.jpg'),
                              "photo_2.jpg not found in output")
 
+    def test_bracket_notation_consistency(self) -> None:
+        """Both bracket-notation outputs have EXIF:DateTimeOriginal set correctly."""
+        for filename, expected_dt in self._BRACKET_CASES:
+            with self.subTest(file=filename):
+                tags = self._read_tags(filename, ['EXIF:DateTimeOriginal'])
+                self.assertEqual(tags.get('EXIF:DateTimeOriginal'), expected_dt,
+                                 f"{filename}: EXIF:DateTimeOriginal mismatch")
+
     # ------------------------------------------------------------------
     # Category 11 — File Timestamps
     # ------------------------------------------------------------------
+
+    # output_filename → expected UTC epoch (all share the same default epoch)
+    _TIMESTAMP_CASES: dict = {
+        'photo_basic.jpg': 1723113846,
+        'gps_ne.jpg':      1723113846,
+        'desc_utf8.jpg':   1723113846,
+    }
+
+    # (media_filename, sidecar_filename) pairs whose mtimes must match within 2 s
+    _SIDECAR_PAIR_CASES: list = [
+        ('sc_avi.avi',  'sc_avi.avi.xmp'),
+        ('sc_png.png',  'sc_png.png.xmp'),
+        ('test.mp4',    'test.mp4.xmp'),
+    ]
+
+    def _assert_output_mtime(self, filename: str, expected_epoch: int,
+                             delta: int = 2) -> None:
+        """Assert that *filename* in the output tree has mtime ≈ *expected_epoch*."""
+        out = self._find_output_file(filename)
+        self.assertIsNotNone(out, f"Output file not found: {filename!r}")
+        self.assertAlmostEqual(
+            out.stat().st_mtime, expected_epoch, delta=delta,
+            msg=(f"{filename} mtime ({out.stat().st_mtime:.0f}) "
+                 f"not within {delta} s of expected ({expected_epoch})"),
+        )
 
     def test_input_timestamps_unchanged(self) -> None:
         """No input file mtime, ctime, or size changed during the merger run."""
@@ -1372,32 +1648,55 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                  f"sc_avi.avi.xmp mtime ({xmp.stat().st_mtime:.3f}) differ by more than 2 s"),
         )
 
+    def test_output_timestamp_consistency(self) -> None:
+        """Output file mtimes for _TIMESTAMP_CASES files match the JSON epoch within 2 s."""
+        for filename, expected_epoch in self._TIMESTAMP_CASES.items():
+            with self.subTest(file=filename):
+                self._assert_output_mtime(filename, expected_epoch)
+
+    def test_sidecar_timestamp_consistency(self) -> None:
+        """Media file and its XMP sidecar share matching mtimes (within 2 s)."""
+        for media_name, sidecar_name in self._SIDECAR_PAIR_CASES:
+            with self.subTest(pair=f"{media_name} / {sidecar_name}"):
+                media = self._find_output_file(media_name)
+                sidecar = self._find_output_file(sidecar_name)
+                self.assertIsNotNone(media, f"{media_name} not found in output")
+                self.assertIsNotNone(sidecar, f"{sidecar_name} not found in output")
+                self.assertAlmostEqual(
+                    media.stat().st_mtime, sidecar.stat().st_mtime, delta=2,
+                    msg=(f"{media_name} mtime ({media.stat().st_mtime:.3f}) and "
+                         f"{sidecar_name} mtime ({sidecar.stat().st_mtime:.3f}) differ > 2 s"),
+                )
+
     # ------------------------------------------------------------------
     # Category 12 — Stats Verification
     # ------------------------------------------------------------------
     # Counts derivation:
-    #   total=52  (45 matched + 7 orphans)
-    #   matched=45 (all dirs except FileTypes/Orphans + orphan_no_json;
-    #               includes test.cr2, test.tif, tz_offset_time.jpg, UPPERCASE.JPG)
+    #   total=58  (51 matched + 7 orphans)
+    #   matched=51 (all dirs except FileTypes/Orphans + orphan_no_json;
+    #               +1 tz_minus930, +3 desc_multiline/whitespace/partial_blocked,
+    #               +2 same_name_a/b.mp4 video dups)
     #   orphans=7  (orphan_no_json + 6 × FileTypes/Orphans)
     #   gps=8      (6 GPS Tests + sc_png + sc_avi)
-    #   sidecars=10 (test.png.xmp + test.gif.xmp + test.mp4.xmp + test.mov.xmp +
+    #   sidecars=12 (test.png.xmp + test.gif.xmp + test.mp4.xmp + test.mov.xmp +
     #               test.avi.xmp + test.mkv.xmp + test.webm.xmp from FileTypes/Matched,
-    #               + sc_png.png.xmp + sc_gif.gif.xmp + sc_avi.avi.xmp)
+    #               + sc_png.png.xmp + sc_gif.gif.xmp + sc_avi.avi.xmp
+    #               + same_video.mp4.xmp + same_video_2.mp4.xmp from Duplicates)
     #   descriptions_cleared=1  (desc_blocked.jpg)
-    #   duplicates_renamed=2    (same_name_b → same_name_2, photo(2) → photo_2)
-    #   written=52
+    #   duplicates_renamed=3    (same_name_b → same_name_2, photo(2) → photo_2,
+    #                            same_name_b.mp4 → same_video_2.mp4)
+    #   written=58
     #   errors=0
 
     def test_stats_total_count(self) -> None:
-        """Total media files processed = 52."""
-        self.assertEqual(self.stats.total_media_files, 52,
-                         f"Expected 52 total, got {self.stats.total_media_files}")
+        """Total media files processed = 58."""
+        self.assertEqual(self.stats.total_media_files, 58,
+                         f"Expected 58 total, got {self.stats.total_media_files}")
 
     def test_stats_matched_count(self) -> None:
-        """Matched files (with JSON) = 45."""
-        self.assertEqual(self.stats.matched, 45,
-                         f"Expected 45 matched, got {self.stats.matched}")
+        """Matched files (with JSON) = 51."""
+        self.assertEqual(self.stats.matched, 51,
+                         f"Expected 51 matched, got {self.stats.matched}")
 
     def test_stats_orphan_count(self) -> None:
         """Orphan files (no JSON) = 7."""
@@ -1410,9 +1709,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 8 GPS writes, got {self.stats.gps_written}")
 
     def test_stats_sidecars_created(self) -> None:
-        """XMP sidecars created = 10 (7 from FileTypes/Matched + sc_png.png, sc_gif.gif, sc_avi.avi)."""
-        self.assertEqual(self.stats.sidecars_created, 10,
-                         f"Expected 10 sidecars, got {self.stats.sidecars_created}")
+        """XMP sidecars created = 12 (7 from FileTypes/Matched + 3 from Sidecars/ + 2 from Duplicates/)."""
+        self.assertEqual(self.stats.sidecars_created, 12,
+                         f"Expected 12 sidecars, got {self.stats.sidecars_created}")
 
     def test_stats_zero_errors(self) -> None:
         """Merger reports zero errors for well-formed test data."""
@@ -1420,9 +1719,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 0 errors, got {self.stats.errors}")
 
     def test_stats_written_count(self) -> None:
-        """Files written = 51 (total_media_files when errors == 0)."""
-        self.assertEqual(self.stats.written, 52,
-                         f"Expected 52 written, got {self.stats.written}")
+        """Files written = 58 (total_media_files when errors == 0)."""
+        self.assertEqual(self.stats.written, 58,
+                         f"Expected 58 written, got {self.stats.written}")
 
     def test_stats_descriptions_cleared(self) -> None:
         """descriptions_cleared = 1 (desc_blocked.jpg carries 'SONY DSC')."""
@@ -1430,9 +1729,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 1 description cleared, got {self.stats.descriptions_cleared}")
 
     def test_stats_duplicates_renamed(self) -> None:
-        """duplicates_renamed = 2 (one from Duplicates/, one from BracketNotation/)."""
-        self.assertEqual(self.stats.duplicates_renamed, 2,
-                         f"Expected 2 duplicates renamed, got {self.stats.duplicates_renamed}")
+        """duplicates_renamed = 3 (same_name_b.jpg, photo(2).jpg, same_name_b.mp4)."""
+        self.assertEqual(self.stats.duplicates_renamed, 3,
+                         f"Expected 3 duplicates renamed, got {self.stats.duplicates_renamed}")
 
     def test_stats_skipped_json(self) -> None:
         """skipped_json = 1 (bad_json.jpg.json contains invalid JSON)."""
@@ -1445,6 +1744,15 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # QuickTime stores CreateDate as a plain integer (seconds since Mac epoch)
     # without timezone info.  ExifTool returns it as "YYYY:MM:DD HH:MM:SS"
     # with no +HH:MM suffix.
+    # MKV/WebM use Matroska tags; AVI uses RIFF tags — the consistency test
+    # accepts any recognised date tag from _VIDEO_DATE_TAGS.
+
+    _VIDEO_CASES: list = ['test.mp4', 'test.mov', 'test.avi', 'test.mkv', 'test.webm']
+    _VIDEO_DATE_TAGS: list = [
+        'QuickTime:CreateDate',
+        'Matroska:DateTimeOriginal',
+        'RIFF:DateTimeOriginal',
+    ]
 
     def test_mp4_time_utc(self) -> None:
         """MP4: QuickTime:CreateDate is present and has no timezone offset suffix."""
@@ -1466,9 +1774,41 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self.assertNotRegex(str(dt), r'[+-]\d{2}:\d{2}$',
                             f"test.mov: QuickTime:CreateDate has unexpected tz suffix: {dt!r}")
 
+    def test_video_utc_consistency(self) -> None:
+        """Every video format has a recognised date tag with no timezone offset suffix."""
+        for filename in self._VIDEO_CASES:
+            with self.subTest(file=filename):
+                tags = self._read_tags(filename, self._VIDEO_DATE_TAGS)
+                dt = next(
+                    (tags.get(tag) for tag in self._VIDEO_DATE_TAGS if tags.get(tag)),
+                    None,
+                )
+                self.assertIsNotNone(
+                    dt, f"{filename}: no date tag found in {self._VIDEO_DATE_TAGS}",
+                )
+                self.assertNotRegex(
+                    str(dt), r'[+-]\d{2}:\d{2}$',
+                    f"{filename}: date tag has unexpected tz suffix: {dt!r}",
+                )
+
     # ------------------------------------------------------------------
     # Category 14 — Special Filenames
     # ------------------------------------------------------------------
+
+    _SPECIAL_CASES: dict = {
+        'Kosi Bay - 2014 - 179.jpg':         '2024:08:08 12:44:06',
+        '_DSC5757-Enhanced-NR - Kruger.jpg': '2024:08:08 12:44:06',
+        'photo(1711).jpg':                   '2024:08:08 12:44:06',
+        'UPPERCASE.jpg':                     '2024:08:08 12:44:06',
+    }
+
+    def _assert_special_filename(self, filename: str, expected_dt: str) -> None:
+        """Assert that a special-filename output exists and has the correct EXIF date."""
+        path = self._find_output_file(filename)
+        self.assertIsNotNone(path, f"Output file not found for special filename: {filename!r}")
+        tags = self._read_tags(filename, ['EXIF:DateTimeOriginal'])
+        self.assertEqual(tags.get('EXIF:DateTimeOriginal'), expected_dt,
+                         f"{filename}: EXIF:DateTimeOriginal mismatch")
 
     def test_spaces_in_filename(self) -> None:
         """Filename with spaces and dashes: EXIF:DateTimeOriginal written correctly."""
@@ -1497,6 +1837,12 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         tags = self._read_tags('UPPERCASE.jpg', ['EXIF:DateTimeOriginal'])
         self.assertEqual(tags.get('EXIF:DateTimeOriginal'), '2024:08:08 12:44:06',
                          "UPPERCASE.jpg: EXIF:DateTimeOriginal mismatch")
+
+    def test_special_filename_consistency(self) -> None:
+        """Every special-filename file exists in output with the correct EXIF date."""
+        for filename, expected_dt in self._SPECIAL_CASES.items():
+            with self.subTest(file=filename):
+                self._assert_special_filename(filename, expected_dt)
 
     # ------------------------------------------------------------------
     # tearDownClass
@@ -1552,17 +1898,21 @@ if __name__ == '__main__':
         ("GPS (4 quadrants + alt)",   ("test_gps_",)),
         ("Timezones",                 ("test_timezone_",)),
         ("Descriptions (UTF-8, etc)", ("test_description_",)),
-        ("File Types (matched)",      ("test_matched_",)),
+        ("File Types (matched)",      ("test_matched_",        "test_filetype_")),
         ("Orphan Files",              ("test_orphan_",)),
-        ("XMP Sidecars",              ("test_xmp_",)),
+        ("XMP Sidecars",              ("test_xmp_",            "test_sidecar_consistency_")),
         ("Duplicates",                ("test_duplicate_",)),
         ("Bracket Notation",          ("test_bracket_",)),
         ("File Timestamps",           ("test_input_timestamps_", "test_output_timestamps_",
-                                       "test_sidecar_timestamps_")),
+                                       "test_output_timestamp_c",
+                                       "test_sidecar_timestamps_",
+                                       "test_sidecar_timestamp_c")),
         ("Stats Verification",        ("test_stats_",)),
-        ("Video UTC Time",            ("test_mp4_time_",       "test_mov_time_")),
+        ("Video UTC Time",            ("test_mp4_time_",       "test_mov_time_",
+                                       "test_video_utc_")),
         ("Special Filenames",         ("test_spaces_",         "test_leading_",
-                                       "test_parentheses_",    "test_uppercase_")),
+                                       "test_parentheses_",    "test_uppercase_",
+                                       "test_special_filename_")),
     ]
 
     def _cat(name: str) -> str:
