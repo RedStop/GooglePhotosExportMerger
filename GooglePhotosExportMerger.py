@@ -92,6 +92,9 @@ def _build_sidecar_params(info: MediaFileInfo, gps: Optional[Dict[str, float]]) 
     """Build ExifTool params for creating an XMP sidecar."""
     params = ['-charset', 'filename=utf8']
 
+    if info.new_title:
+        params.append(f'-XMP:Title={Path(info.new_title).stem}')
+
     if info.resolved_datetime:
         tz_str = _format_tz_offset(info.resolved_datetime.tzinfo)
         dt_str = info.resolved_datetime.strftime('%Y:%m:%d %H:%M:%S') + tz_str
@@ -101,7 +104,7 @@ def _build_sidecar_params(info: MediaFileInfo, gps: Optional[Dict[str, float]]) 
 
     if not info.clear_descriptions and info.json_data:
         desc = info.json_data.get('description', '')
-        if desc:
+        if desc and desc.strip():
             escaped, needs_E = _escape_description(desc)
             if needs_E:
                 params.append('-E')
@@ -117,12 +120,13 @@ def _build_sidecar_params(info: MediaFileInfo, gps: Optional[Dict[str, float]]) 
 
 def _escape_description(desc: str) -> tuple:
     """Escape newlines for ExifTool's -execute batch protocol.
+    Normalizes CRLF and standalone CR to LF before escaping.
     Returns (escaped_desc, needs_E_flag)."""
-    if '\n' not in desc and '\r' not in desc:
+    desc = desc.replace('\r\n', '\n').replace('\r', '\n')
+    if '\n' not in desc:
         return desc, False
     escaped = desc.replace('&', '&amp;')
     escaped = escaped.replace('\n', '&#xa;')
-    escaped = escaped.replace('\r', '&#xd;')
     return escaped, True
 
 
@@ -426,7 +430,7 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
             stats.descriptions_cleared += 1
         elif info.json_data:
             desc = info.json_data.get('description', '')
-            if desc:
+            if desc and desc.strip():
                 escaped, needs_E = _escape_description(desc)
                 if needs_E:
                     params.append('-E')

@@ -1795,12 +1795,11 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # MKV/WebM use Matroska tags; AVI uses RIFF tags — the consistency test
     # accepts any recognised date tag from _VIDEO_DATE_TAGS.
 
-    _VIDEO_CASES: list = ['test.mp4', 'test.mov', 'test.avi', 'test.mkv', 'test.webm']
-    _VIDEO_DATE_TAGS: list = [
-        'QuickTime:CreateDate',
-        'Matroska:DateTimeOriginal',
-        'RIFF:DateTimeOriginal',
-    ]
+    # AVI (RIFF) and MKV/WebM (Matroska) cannot have date tags written to the
+    # main file — ExifTool cannot write those container formats. Dates for those
+    # formats live only in the XMP sidecar.
+    _VIDEO_CASES: list = ['test.mp4', 'test.mov']
+    _VIDEO_DATE_TAGS: list = ['QuickTime:CreateDate']
 
     def test_mp4_time_utc(self) -> None:
         """MP4: QuickTime:CreateDate is present and has no timezone offset suffix."""
@@ -2221,6 +2220,7 @@ if __name__ == '__main__':
             self._outcomes: list[tuple[str, str]] = []  # (method_name, status)
             self._current_cat: str = ''
             self._pending_desc: str = ''
+            self._subtest_failed: set[str] = set()  # methods with at least one subTest failure
 
         def _record(self, test: unittest.TestCase, status: str) -> None:
             name = getattr(test, '_testMethodName', None)
@@ -2261,10 +2261,21 @@ if __name__ == '__main__':
                 self.stream.write(emoji[0])
                 self.stream.flush()
 
+        def addSubTest(self, test, subtest, err):
+            super().addSubTest(test, subtest, err)
+            if err is not None:
+                self._emit('❌')
+                name = getattr(test, '_testMethodName', None)
+                if name and name not in self._subtest_failed:
+                    self._subtest_failed.add(name)
+                    self._record(test, 'FAIL')
+
         def addSuccess(self, test):
             unittest.TestResult.addSuccess(self, test)
             self._emit('✅')
-            self._record(test, 'PASS')
+            name = getattr(test, '_testMethodName', None)
+            if name not in self._subtest_failed:
+                self._record(test, 'PASS')
 
         def addFailure(self, test, err):
             unittest.TestResult.addFailure(self, test, err)
