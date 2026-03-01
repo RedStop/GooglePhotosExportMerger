@@ -754,6 +754,47 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                        description='AVI sidecar test',
                        geoData=_geo_sidecar, geoDataExif=_geo_sidecar)
 
+        # ── Preservation ───────────────────────────────────────────────────
+        # One file per photo type — each has 9 EXIF tags pre-written before
+        # the merger runs so we can verify they survive the merge unchanged.
+        d = inp / 'Preservation'
+        _pres_files = [
+            ('preserve_jpg.jpg',   'jpg'),
+            ('preserve_jpeg.jpeg', 'jpeg'),
+            ('preserve_tiff.tiff', 'tiff'),
+            ('preserve_tif.tif',   'tif'),
+            ('preserve_dng.dng',   'dng'),
+            ('preserve_cr2.cr2',   'cr2'),
+            ('preserve_heic.heic', 'heic'),
+            ('preserve_png.png',   'png'),
+            ('preserve_gif.gif',   'gif'),
+        ]
+        for fname, _ext in _pres_files:
+            make_media_file(d / fname)
+            make_json_file(d / f'{fname}.json', title=fname)
+
+        # Pre-write EXIF preservation tags into each file (failures are per-file
+        # since PNG/GIF may not support the full EXIF tag set).
+        _pres_tags = {
+            'EXIF:Make':         'Canon',
+            'EXIF:Model':        'Canon EOS R5',
+            'EXIF:ISO':          400,
+            'EXIF:ExposureTime': '1/250',
+            'EXIF:FNumber':      2.8,
+            'EXIF:FocalLength':  50,
+            'EXIF:Software':     'Adobe Lightroom Classic 12.0',
+            'EXIF:Artist':       'Test Photographer',
+            'EXIF:Copyright':    'Copyright 2024 Test',
+        }
+        with exiftool.ExifToolHelper() as _et:
+            for fname, _ext in _pres_files:
+                fpath = d / fname
+                try:
+                    _et.set_tags([str(fpath)], _pres_tags,
+                                 params=['-overwrite_original'])
+                except Exception:
+                    pass  # PNG/GIF may reject some tags — that is acceptable
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -883,6 +924,11 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             'UPPERCASE.jpg',   # extension normalised to lowercase in output
             # Sidecars
             'sc_png.png', 'sc_gif.gif', 'sc_avi.avi',
+            # Preservation
+            'preserve_jpg.jpg', 'preserve_jpeg.jpeg',
+            'preserve_tiff.tiff', 'preserve_tif.tif',
+            'preserve_dng.dng', 'preserve_cr2.cr2', 'preserve_heic.heic',
+            'preserve_png.png', 'preserve_gif.gif',
         ]
 
         missing = [name for name in expected if name not in output_names]
@@ -1672,31 +1718,33 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # Category 12 — Stats Verification
     # ------------------------------------------------------------------
     # Counts derivation:
-    #   total=58  (51 matched + 7 orphans)
-    #   matched=51 (all dirs except FileTypes/Orphans + orphan_no_json;
+    #   total=67  (60 matched + 7 orphans)
+    #             (+9 Preservation/ files vs. previous 58)
+    #   matched=60 (all dirs except FileTypes/Orphans + orphan_no_json;
     #               +1 tz_minus930, +3 desc_multiline/whitespace/partial_blocked,
-    #               +2 same_name_a/b.mp4 video dups)
+    #               +2 same_name_a/b.mp4 video dups, +9 Preservation/)
     #   orphans=7  (orphan_no_json + 6 × FileTypes/Orphans)
     #   gps=8      (6 GPS Tests + sc_png + sc_avi)
-    #   sidecars=12 (test.png.xmp + test.gif.xmp + test.mp4.xmp + test.mov.xmp +
+    #   sidecars=14 (test.png.xmp + test.gif.xmp + test.mp4.xmp + test.mov.xmp +
     #               test.avi.xmp + test.mkv.xmp + test.webm.xmp from FileTypes/Matched,
     #               + sc_png.png.xmp + sc_gif.gif.xmp + sc_avi.avi.xmp
-    #               + same_video.mp4.xmp + same_video_2.mp4.xmp from Duplicates)
+    #               + same_video.mp4.xmp + same_video_2.mp4.xmp from Duplicates,
+    #               + preserve_png.png.xmp + preserve_gif.gif.xmp from Preservation)
     #   descriptions_cleared=1  (desc_blocked.jpg)
     #   duplicates_renamed=3    (same_name_b → same_name_2, photo(2) → photo_2,
     #                            same_name_b.mp4 → same_video_2.mp4)
-    #   written=58
+    #   written=67
     #   errors=0
 
     def test_stats_total_count(self) -> None:
-        """Total media files processed = 58."""
-        self.assertEqual(self.stats.total_media_files, 58,
-                         f"Expected 58 total, got {self.stats.total_media_files}")
+        """Total media files processed = 67 (60 matched + 7 orphans)."""
+        self.assertEqual(self.stats.total_media_files, 67,
+                         f"Expected 67 total, got {self.stats.total_media_files}")
 
     def test_stats_matched_count(self) -> None:
-        """Matched files (with JSON) = 51."""
-        self.assertEqual(self.stats.matched, 51,
-                         f"Expected 51 matched, got {self.stats.matched}")
+        """Matched files (with JSON) = 60."""
+        self.assertEqual(self.stats.matched, 60,
+                         f"Expected 60 matched, got {self.stats.matched}")
 
     def test_stats_orphan_count(self) -> None:
         """Orphan files (no JSON) = 7."""
@@ -1709,9 +1757,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 8 GPS writes, got {self.stats.gps_written}")
 
     def test_stats_sidecars_created(self) -> None:
-        """XMP sidecars created = 12 (7 from FileTypes/Matched + 3 from Sidecars/ + 2 from Duplicates/)."""
-        self.assertEqual(self.stats.sidecars_created, 12,
-                         f"Expected 12 sidecars, got {self.stats.sidecars_created}")
+        """XMP sidecars created = 14 (7 from FileTypes/Matched + 3 from Sidecars/ + 2 from Duplicates/ + 2 from Preservation/)."""
+        self.assertEqual(self.stats.sidecars_created, 14,
+                         f"Expected 14 sidecars, got {self.stats.sidecars_created}")
 
     def test_stats_zero_errors(self) -> None:
         """Merger reports zero errors for well-formed test data."""
@@ -1719,9 +1767,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 0 errors, got {self.stats.errors}")
 
     def test_stats_written_count(self) -> None:
-        """Files written = 58 (total_media_files when errors == 0)."""
-        self.assertEqual(self.stats.written, 58,
-                         f"Expected 58 written, got {self.stats.written}")
+        """Files written = 67 (total_media_files when errors == 0)."""
+        self.assertEqual(self.stats.written, 67,
+                         f"Expected 67 written, got {self.stats.written}")
 
     def test_stats_descriptions_cleared(self) -> None:
         """descriptions_cleared = 1 (desc_blocked.jpg carries 'SONY DSC')."""
@@ -1802,6 +1850,118 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         'UPPERCASE.jpg':                     '2024:08:08 12:44:06',
     }
 
+    # ------------------------------------------------------------------
+    # Category 15 — EXIF Preservation constants
+    # ------------------------------------------------------------------
+
+    # Tags written into Preservation/ files before the merger runs.
+    _PRESERVATION_WRITE_TAGS: dict = {
+        'EXIF:Make':         'Canon',
+        'EXIF:Model':        'Canon EOS R5',
+        'EXIF:ISO':          400,
+        'EXIF:ExposureTime': '1/250',
+        'EXIF:FNumber':      2.8,
+        'EXIF:FocalLength':  50,
+        'EXIF:Software':     'Adobe Lightroom Classic 12.0',
+        'EXIF:Artist':       'Test Photographer',
+        'EXIF:Copyright':    'Copyright 2024 Test',
+    }
+
+    # Tags to read back from the output file.
+    _PRESERVATION_READ_TAGS: list = [
+        'EXIF:Make', 'EXIF:Model', 'EXIF:ISO', 'EXIF:ExposureTime',
+        'EXIF:FNumber', 'EXIF:FocalLength', 'EXIF:Software',
+        'EXIF:Artist', 'EXIF:Copyright',
+    ]
+
+    # (filename, supports_full_exif) — True for formats with reliable EXIF:* support.
+    # HEIC uses a container format; ExifTool reads its tags under QuickTime:/XMP:
+    # groups rather than EXIF:*, so it behaves like PNG/GIF for this test.
+    _PRESERVATION_FILE_TYPES: list = [
+        ('preserve_jpg.jpg',   True),
+        ('preserve_jpeg.jpeg', True),
+        ('preserve_tiff.tiff', True),
+        ('preserve_tif.tif',   True),
+        ('preserve_dng.dng',   True),
+        ('preserve_cr2.cr2',   True),
+        ('preserve_heic.heic', False),
+        ('preserve_png.png',   False),
+        ('preserve_gif.gif',   False),
+    ]
+
+    # {filename: supports_full_exif} — used by the consistency test.
+    _PRESERVATION_CASES: dict = {fname: full for fname, full in _PRESERVATION_FILE_TYPES}
+
+    @staticmethod
+    def _parse_exposure(raw: Any) -> float:
+        """Convert an ExifTool ExposureTime value to a float seconds value.
+
+        ExifTool may return ``'1/250'`` (fraction string) or ``'0.004'``
+        (decimal string) or a numeric type.
+        """
+        s = str(raw).strip()
+        if '/' in s:
+            num, den = s.split('/', 1)
+            return float(num) / float(den)
+        return float(s)
+
+    @staticmethod
+    def _parse_focal_length(raw: Any) -> float:
+        """Convert an ExifTool FocalLength value to a float mm value.
+
+        ExifTool may return ``'50.0 mm'`` or ``'50'`` or a numeric type.
+        """
+        s = str(raw).strip()
+        # Strip trailing unit (e.g. " mm")
+        s = s.split()[0]
+        return float(s)
+
+    def _assert_preservation(self, filename: str, supports_full_exif: bool) -> None:
+        """Assert that EXIF preservation tags survived the merge unchanged.
+
+        For formats with full EXIF support all nine tags must be present and
+        match the pre-written values.  For PNG/GIF (``supports_full_exif=False``)
+        only tags that are actually present in the output are checked.
+        """
+        tags = self._read_tags(filename, self._PRESERVATION_READ_TAGS)
+
+        def _check(tag: str, expected: Any) -> None:
+            actual = tags.get(tag)
+            if not supports_full_exif and actual is None:
+                return  # PNG/GIF may lack some tags — skip gracefully
+            self.assertIsNotNone(actual,
+                                 f"{filename}: {tag} missing from output")
+            if tag == 'EXIF:ExposureTime':
+                self.assertAlmostEqual(
+                    self._parse_exposure(actual),
+                    self._parse_exposure(expected),
+                    places=6,
+                    msg=f"{filename}: {tag} mismatch (got {actual!r})",
+                )
+            elif tag == 'EXIF:FocalLength':
+                self.assertAlmostEqual(
+                    self._parse_focal_length(actual),
+                    float(expected),
+                    places=3,
+                    msg=f"{filename}: {tag} mismatch (got {actual!r})",
+                )
+            elif tag in ('EXIF:FNumber',):
+                self.assertAlmostEqual(
+                    float(actual),
+                    float(expected),
+                    places=3,
+                    msg=f"{filename}: {tag} mismatch (got {actual!r})",
+                )
+            elif tag == 'EXIF:ISO':
+                self.assertEqual(int(actual), int(expected),
+                                 f"{filename}: {tag} mismatch (got {actual!r})")
+            else:
+                self.assertEqual(str(actual).strip(), str(expected),
+                                 f"{filename}: {tag} mismatch (got {actual!r})")
+
+        for tag, expected in self._PRESERVATION_WRITE_TAGS.items():
+            _check(tag, expected)
+
     def _assert_special_filename(self, filename: str, expected_dt: str) -> None:
         """Assert that a special-filename output exists and has the correct EXIF date."""
         path = self._find_output_file(filename)
@@ -1843,6 +2003,52 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         for filename, expected_dt in self._SPECIAL_CASES.items():
             with self.subTest(file=filename):
                 self._assert_special_filename(filename, expected_dt)
+
+    # ------------------------------------------------------------------
+    # Category 15 — EXIF Preservation
+    # ------------------------------------------------------------------
+
+    def test_preservation_jpg(self) -> None:
+        """JPEG (.jpg) — camera/lens/software tags preserved through merge."""
+        self._assert_preservation('preserve_jpg.jpg', True)
+
+    def test_preservation_jpeg(self) -> None:
+        """JPEG (.jpeg) — camera/lens/software tags preserved through merge."""
+        self._assert_preservation('preserve_jpeg.jpeg', True)
+
+    def test_preservation_tiff(self) -> None:
+        """TIFF (.tiff) — camera/lens/software tags preserved through merge."""
+        self._assert_preservation('preserve_tiff.tiff', True)
+
+    def test_preservation_tif(self) -> None:
+        """TIFF (.tif) — camera/lens/software tags preserved through merge."""
+        self._assert_preservation('preserve_tif.tif', True)
+
+    def test_preservation_dng(self) -> None:
+        """DNG — camera/lens/software tags preserved through merge."""
+        self._assert_preservation('preserve_dng.dng', True)
+
+    def test_preservation_cr2(self) -> None:
+        """CR2 — camera/lens/software tags preserved through merge."""
+        self._assert_preservation('preserve_cr2.cr2', True)
+
+    def test_preservation_heic(self) -> None:
+        """HEIC — any present EXIF tags preserved through merge (container format)."""
+        self._assert_preservation('preserve_heic.heic', False)
+
+    def test_preservation_png(self) -> None:
+        """PNG — any present EXIF tags preserved through merge (sidecar format)."""
+        self._assert_preservation('preserve_png.png', False)
+
+    def test_preservation_gif(self) -> None:
+        """GIF — any present EXIF tags preserved through merge (sidecar format)."""
+        self._assert_preservation('preserve_gif.gif', False)
+
+    def test_preservation_consistency(self) -> None:
+        """Every Preservation/ file exists in output with camera tags intact."""
+        for filename, supports_full_exif in self._PRESERVATION_CASES.items():
+            with self.subTest(file=filename):
+                self._assert_preservation(filename, supports_full_exif)
 
     # ------------------------------------------------------------------
     # tearDownClass
@@ -1913,6 +2119,7 @@ if __name__ == '__main__':
         ("Special Filenames",         ("test_spaces_",         "test_leading_",
                                        "test_parentheses_",    "test_uppercase_",
                                        "test_special_filename_")),
+        ("EXIF Preservation",         ("test_preservation_",)),
     ]
 
     def _cat(name: str) -> str:
