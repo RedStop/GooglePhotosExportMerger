@@ -22,6 +22,11 @@ from typing import Any, Dict
 import exiftool
 from GooglePhotosExportMerger import GooglePhotosExportMerger, MergeStats
 
+# Custom log level below DEBUG (10) — used by infrastructure-validation tests
+# to document intent without cluttering normal output.
+TRACE = 5
+logging.addLevelName(TRACE, 'TRACE')
+
 
 # ---------------------------------------------------------------------------
 # Internal binary builders (called once at import time)
@@ -2050,6 +2055,53 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                 self._assert_preservation(filename, supports_full_exif)
 
     # ------------------------------------------------------------------
+    # Infrastructure Validation
+    # ------------------------------------------------------------------
+    # Tests that validate the test framework itself: failure detection,
+    # subTest tracking, error recording, and summary reporting.
+    # The @expectedFailure tests MUST fail; if they don't, Python marks
+    # them as unexpected successes and the overall run becomes FAIL.
+
+    @unittest.expectedFailure
+    def test_infra_assert_equal_mismatch(self) -> None:
+        """assertEqual detects value mismatch."""
+        logging.log(TRACE, 'Infra: verifying assertEqual catches 1 != 2')
+        self.assertEqual(1, 2)
+
+    @unittest.expectedFailure
+    def test_infra_assert_true_false(self) -> None:
+        """assertTrue detects False."""
+        logging.log(TRACE, 'Infra: verifying assertTrue catches False')
+        self.assertTrue(False)
+
+    @unittest.expectedFailure
+    def test_infra_assert_in_missing(self) -> None:
+        """assertIn detects missing element."""
+        logging.log(TRACE, 'Infra: verifying assertIn catches missing element')
+        self.assertIn('x', [])
+
+    @unittest.expectedFailure
+    def test_infra_raise_exception(self) -> None:
+        """Unhandled RuntimeError is recorded as an error."""
+        logging.log(TRACE, 'Infra: verifying unhandled exception is caught')
+        raise RuntimeError('deliberate infrastructure test error')
+
+    @unittest.expectedFailure
+    def test_infra_subtest_some_fail(self) -> None:
+        """subTest loop with some failures exercises _subtest_failed tracking."""
+        logging.log(TRACE, 'Infra: verifying subTest partial failure is detected')
+        for i in range(4):
+            with self.subTest(i=i):
+                self.assertTrue(i % 2 == 0)  # i=1, i=3 fail
+
+    def test_infra_subtest_all_pass(self) -> None:
+        """subTest loop where all pass — _subtest_failed must NOT flag this."""
+        logging.log(TRACE, 'Infra: verifying subTest all-pass is not falsely flagged')
+        for i in range(4):
+            with self.subTest(i=i):
+                self.assertIsInstance(i, int)
+
+    # ------------------------------------------------------------------
     # tearDownClass
     # ------------------------------------------------------------------
 
@@ -2119,6 +2171,7 @@ if __name__ == '__main__':
                                        "test_parentheses_",    "test_uppercase_",
                                        "test_special_filename_")),
         ("EXIF Preservation",         ("test_preservation_",)),
+        ("Infrastructure Validation", ("test_infra_",)),
     ]
 
     def _cat(name: str) -> str:
@@ -2287,6 +2340,16 @@ if __name__ == '__main__':
             self._emit('❌')
             self._record(test, 'ERROR')
 
+        def addExpectedFailure(self, test, err):
+            unittest.TestResult.addExpectedFailure(self, test, err)
+            self._emit('✅')
+            self._record(test, 'XFAIL')
+
+        def addUnexpectedSuccess(self, test):
+            unittest.TestResult.addUnexpectedSuccess(self, test)
+            self._emit('❌')
+            self._record(test, 'XPASS')
+
         def addSkip(self, test, reason):
             unittest.TestResult.addSkip(self, test, reason)
             self._emit('⏭')
@@ -2309,7 +2372,35 @@ if __name__ == '__main__':
     suite = unittest.TestSuite(
         sorted(suite, key=lambda t: (_cat(t._testMethodName), t._testMethodName))
     )
+    # Count @expectedFailure tests so the summary can show "expected failures=N/M".
+    _total_xfail = sum(
+        1 for t in suite
+        if getattr(getattr(t, t._testMethodName, None),
+                   '__unittest_expecting_failure__', False)
+    )
+
+    class _XFailStream:
+        """Thin stream wrapper: rewrites 'expected failures=N' → 'expected failures=N/M'."""
+        def __init__(self, inner, total):
+            self._inner = inner
+            self._total = total
+        def write(self, text):
+            import re
+            self._inner.write(re.sub(
+                r'expected failures=(\d+)',
+                lambda m: f'expected failures={m.group(1)}/{self._total}',
+                text))
+        def writeln(self, text=''):
+            import re
+            self._inner.writeln(re.sub(
+                r'expected failures=(\d+)',
+                lambda m: f'expected failures={m.group(1)}/{self._total}',
+                text))
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
     runner = unittest.TextTestRunner(verbosity=2, resultclass=_SummaryResult)
+    runner.stream = _XFailStream(runner.stream, _total_xfail)
     result = runner.run(suite)
 
     # ── Category summary table ───────────────────────────────────────────────
@@ -2322,7 +2413,7 @@ if __name__ == '__main__':
     for method, status in result._outcomes:
         c = _cat(method)
         cat_stats[c]['total'] += 1
-        if status == 'PASS':
+        if status in ('PASS', 'XFAIL'):
             cat_stats[c]['pass'] += 1
         else:
             cat_stats[c]['fail'] += 1
