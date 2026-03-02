@@ -13,4 +13,7 @@
 *.xmp
 *.zip
 
+.venv/
 __pycache__
+exiftool-*
+exiftool.exe
