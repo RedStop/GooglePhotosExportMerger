@@ -46,6 +46,20 @@ class MergeStats:
     gps_written: int = 0
     descriptions_cleared: int = 0
 
+    def merge(self, other: 'MergeStats') -> None:
+        """Add all counters from *other* into this instance.
+
+        Used to aggregate partial stats returned by parallel workers.
+        Only processing counters are merged; pipeline-level counters
+        (total_media_files, matched, orphans, skipped_json, duplicates_renamed)
+        are set before parallelisation and should not be summed again.
+        """
+        self.written += other.written
+        self.sidecars_created += other.sidecars_created
+        self.errors += other.errors
+        self.gps_written += other.gps_written
+        self.descriptions_cleared += other.descriptions_cleared
+
 
 def _resolve_gps(json_data: Dict[str, Any]) -> Optional[Dict[str, float]]:
     """Extract valid GPS data from JSON. Returns dict with lat, lon, alt or None."""
@@ -65,10 +79,11 @@ def _resolve_gps(json_data: Dict[str, Any]) -> Optional[Dict[str, float]]:
 
 class AbstractMediaMerger(ABC):
     def __init__(self, input_dir: str, output_dir: str, dry_run: bool = False,
-                 blocked_descriptions=None):
+                 blocked_descriptions=None, num_workers: int = 1):
         self.input_path = Path(input_dir).resolve()
         self.output_path = Path(output_dir).resolve()
         self.dry_run = dry_run
+        self.num_workers = max(1, num_workers)
         self.blocked_descriptions: set = set(blocked_descriptions) if blocked_descriptions else set()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.DEBUG)
@@ -105,11 +120,20 @@ class AbstractMediaMerger(ABC):
 
             # Step 6: Resolve duplicate filenames
             self._resolve_duplicates(media_files, stats)
-
-            # Step 7 & 8: Process files
-            self._process_files(media_files, stats)
         finally:
             self._close_writer()
+
+        # Step 7 & 8: Process files
+        # Note: when running in parallel, each worker opens its own writer.
+        # When running serially, we re-open the writer for processing.
+        if self.num_workers > 1 and not self.dry_run and len(media_files) > 1:
+            self._process_files(media_files, stats)
+        else:
+            self._open_writer()
+            try:
+                self._process_files(media_files, stats)
+            finally:
+                self._close_writer()
 
         # Step 9: Log summary
         self._log_summary(stats)
@@ -201,12 +225,26 @@ class AbstractMediaMerger(ABC):
                 seen[path] = 1
 
     def _process_files(self, media_files: List[MediaFileInfo], stats: MergeStats) -> None:
+        # Filter out files with no output path before dispatching
+        valid_files: List[MediaFileInfo] = []
         for info in media_files:
             if info.output_path is None:
                 self.logger.error("No output path for %s, skipping", self._rel(info.source_path))
                 stats.errors += 1
-                continue
+            else:
+                valid_files.append(info)
 
+        if not valid_files:
+            return
+
+        if self.num_workers > 1 and not self.dry_run and len(valid_files) > 1:
+            self._process_files_parallel(valid_files, stats)
+        else:
+            self._process_files_serial(valid_files, stats)
+
+    def _process_files_serial(self, media_files: List[MediaFileInfo], stats: MergeStats) -> None:
+        """Process files one at a time using the current ExifTool instance."""
+        for info in media_files:
             try:
                 if info.is_orphan:
                     self._process_orphan(info, stats)
@@ -215,6 +253,13 @@ class AbstractMediaMerger(ABC):
             except Exception as e:
                 self.logger.error("Failed to process %s: %s", self._rel(info.source_path), e)
                 stats.errors += 1
+
+    def _process_files_parallel(self, media_files: List[MediaFileInfo], stats: MergeStats) -> None:
+        """Override in subclass to implement parallel processing.
+
+        Falls back to serial if not overridden.
+        """
+        self._process_files_serial(media_files, stats)
 
     def _log_dry_run(self, info: MediaFileInfo) -> None:
         kind = "ORPHAN" if info.is_orphan else "MATCHED"

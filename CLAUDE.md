@@ -18,8 +18,8 @@ Google Photos Export Merger — a Python utility that merges JSON metadata from 
 # Analyse JSON metadata structure across a directory tree
 python JsonKeyExtractor.py <input_directory> [output_directory]
 
-# Merge metadata into media files
-python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run]
+# Merge metadata into media files (uses all CPU cores by default)
+python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run] [--workers N]
 
 # Run tests
 python -m pytest TestMerger.py
@@ -33,9 +33,9 @@ python -m pytest TestMerger.py
 
 Five modules with clear separation of concerns:
 
-1. **AbstractMediaMerger.py** — Abstract base class defining the merge pipeline. Defines `WriteStrategy` enum (DIRECT, PARTIAL_WITH_SIDECAR, VIDEO_WITH_SIDECAR), `MediaFileInfo` dataclass, and `MergeStats` dataclass. Implements the 9-step merge pipeline, GPS resolution, duplicate filename resolution, dry-run logging, and summary reporting.
+1. **AbstractMediaMerger.py** — Abstract base class defining the merge pipeline. Defines `WriteStrategy` enum (DIRECT, PARTIAL_WITH_SIDECAR, VIDEO_WITH_SIDECAR), `MediaFileInfo` dataclass, and `MergeStats` dataclass (with a `merge()` method for aggregating partial stats from parallel workers). Implements the 9-step merge pipeline, GPS resolution, duplicate filename resolution, dry-run logging, and summary reporting. Accepts a `num_workers` parameter (default 1) and delegates to `_process_files_serial` or `_process_files_parallel` accordingly.
 
-2. **GooglePhotosExportMerger.py** — Concrete implementation of AbstractMediaMerger and the CLI entry point. Builds ExifTool parameters for dates, descriptions, GPS, and timezones. Has a `blocked_descriptions` list in `__main__` for filtering unwanted descriptions.
+2. **GooglePhotosExportMerger.py** — Concrete implementation of AbstractMediaMerger and the CLI entry point. Builds ExifTool parameters for dates, descriptions, GPS, and timezones. Has a `blocked_descriptions` list in `__main__` for filtering unwanted descriptions. Implements parallel file processing via `ProcessPoolExecutor`: files are round-robin distributed across N worker processes, each with its own ExifTool instance. The module-level worker functions (`_process_chunk`, `_worker_process_matched`, `_worker_process_orphan`, `_worker_create_sidecar`, `_worker_set_filesystem_timestamps`) are top-level for pickle compatibility.
 
 3. **JsonFileIdentifier.py** — Matches JSON metadata files to their corresponding media files. Uses `SortedSet` for O(log n + k) prefix-based lookups. Handles Google's bracket notation (e.g., `filename(2).jpg`) and case-insensitive extension matching.
 
@@ -53,3 +53,14 @@ Five modules with clear separation of concerns:
 - Orphan files (no matching JSON) are still copied; dates resolved from existing EXIF or filesystem creation date
 - Duplicate output filenames resolved by appending `_2`, `_3`, etc.
 - `.gitignore` excludes all media and JSON files — only Python source is tracked
+
+## Parallel Processing
+
+- Steps 1–6 of the pipeline (scan, match, resolve dates, resolve duplicates) run serially using a single ExifTool instance — these are fast and involve shared state
+- Step 7 (file processing) runs in parallel via `concurrent.futures.ProcessPoolExecutor` when `num_workers > 1`
+- Each worker process opens its own `ExifToolHelper` instance to avoid IPC bottlenecks
+- Files are distributed round-robin across workers for balanced load
+- Workers return partial `MergeStats` objects that are aggregated via `MergeStats.merge()` in the main process
+- The worker functions are module-level (not methods) because `ProcessPoolExecutor` requires picklable callables
+- `--workers 1` (or omitting `num_workers` from the constructor) preserves the original serial behaviour
+- Dry-run mode always runs serially regardless of `num_workers`

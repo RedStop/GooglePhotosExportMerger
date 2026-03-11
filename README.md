@@ -132,12 +132,13 @@ Once your data is clean, run the merger to write JSON metadata into your media f
 ### Usage
 
 ```bash
-python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run]
+python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run] [--workers N]
 ```
 
 - `input_dir` — The root of your Google Photos Takeout export.
 - `output_dir` — Where to write the merged output. Will be created if it doesn't exist.
 - `--dry-run` — Simulate the merge without writing any files. Useful for previewing what would happen.
+- `--workers N` — Number of parallel worker processes for file processing. Defaults to the number of CPU cores. Each worker runs its own ExifTool instance. Use `--workers 1` to force single-process (serial) mode.
 
 ### What the merger does
 
@@ -146,6 +147,8 @@ python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run]
 3. Updates the file creation time and file modified time to match the photo/video date.
 4. Copies the updated media file into the output directory, organized into `YYYY/MM/filename` subdirectories based on the photo/video date.
 5. **Orphan files** (media with no matching JSON) are still copied to the output — they just won't have updated metadata. Their dates are resolved from existing EXIF tags or the filesystem creation date.
+
+Steps 1–3 (scanning, matching, date resolution) run serially. Step 4 (file processing) runs in parallel across multiple worker processes when `--workers` is greater than 1, with each worker managing its own ExifTool instance.
 
 ### Blocking unwanted descriptions
 
