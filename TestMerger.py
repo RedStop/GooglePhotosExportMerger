@@ -2543,6 +2543,11 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
 # Single-worker regression test
 # ---------------------------------------------------------------------------
 
+# Environment variable gate: set GPEM_SINGLE_WORKER=1 to enable these tests.
+# When running TestMerger.py directly, use --single-worker to set it.
+# When running via pytest, either export the env var or use:
+#   GPEM_SINGLE_WORKER=1 python -m pytest TestMerger.py
+
 class TestSingleWorker(unittest.TestCase):
     """Run the merger with num_workers=1 (serial mode) and verify stats match.
 
@@ -2550,6 +2555,9 @@ class TestSingleWorker(unittest.TestCase):
     the parallel processing refactor.  It builds the same input tree as the
     main test class, runs the merger with a single worker, and asserts that
     all stats counters are identical.
+
+    Opt-in only — these tests roughly double the total run time.
+    Enable via --single-worker (direct runner) or GPEM_SINGLE_WORKER=1 (pytest).
     """
 
     # Class-level state populated by setUpClass
@@ -2560,6 +2568,12 @@ class TestSingleWorker(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        # Gate: only run if explicitly opted-in
+        if os.environ.get('GPEM_SINGLE_WORKER') != '1':
+            raise unittest.SkipTest(
+                'Single-worker tests skipped '
+                '(use --single-worker or set GPEM_SINGLE_WORKER=1)')
+
         logging.basicConfig(
             format='%(levelname)s %(name)s: %(message)s',
             level=logging.WARNING,
@@ -2590,7 +2604,9 @@ class TestSingleWorker(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        shutil.rmtree(str(cls.tmp_dir), ignore_errors=True)
+        tmp = getattr(cls, 'tmp_dir', None)
+        if tmp is not None:
+            shutil.rmtree(str(tmp), ignore_errors=True)
 
     # ------------------------------------------------------------------
     # Stats verification — must match the expected values from the
@@ -2748,6 +2764,10 @@ if __name__ == '__main__':
         '--list-types', action='store_true',
         help='Print available file types and exit',
     )
+    parser.add_argument(
+        '--single-worker', action='store_true',
+        help='Also run single-worker (serial mode) regression tests',
+    )
     args = parser.parse_args()
 
     # ── Early exit for --list-* ──────────────────────────────────────────────
@@ -2769,6 +2789,10 @@ if __name__ == '__main__':
     elif args.keep:
         TestGooglePhotosExportMerger._cleanup_mode = 'auto_keep'
     # else leave default 'prompt'
+
+    # ── Enable single-worker tests if requested ──────────────────────────────
+    if args.single_worker:
+        os.environ['GPEM_SINGLE_WORKER'] = '1'
 
     # ── Suite filter helper ──────────────────────────────────────────────────
     def _filter_suite(suite, categories, file_types):
@@ -2898,7 +2922,8 @@ if __name__ == '__main__':
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(TestGooglePhotosExportMerger))
-    suite.addTests(loader.loadTestsFromTestCase(TestSingleWorker))
+    if args.single_worker:
+        suite.addTests(loader.loadTestsFromTestCase(TestSingleWorker))
     if args.categories or args.file_types:
         print('Running with filters:')
         if args.categories:
