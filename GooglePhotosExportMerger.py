@@ -88,6 +88,40 @@ CONDITIONAL_DATE_READ_TAGS: List[str] = list(CONDITIONAL_DATE_TAGS.keys())
 
 GMT_PLUS_2 = timezone(timedelta(hours=2))
 
+# ---------------------------------------------------------------------------
+# Metadata stripping profiles
+# ---------------------------------------------------------------------------
+# Each profile maps a name to a list of ExifTool params that delete unwanted
+# metadata groups.  Profiles are enabled via --strip-metadata on the CLI.
+# To add a new profile, add an entry here — it will automatically appear in
+# the CLI help and be included when --strip-metadata is used.
+METADATA_STRIP_PROFILES: Dict[str, List[str]] = {
+    'google':    ['-XMP-GCamera:All=', '-Google:All='],
+    'photoshop': ['-Photoshop:All=', '-XMP-photoshop:DocumentAncestors='],
+}
+
+
+def _build_strip_params(profiles: Optional[List[str]] = None) -> Optional[List[str]]:
+    """Build a combined ExifTool param list from the requested strip profiles.
+
+    If *profiles* is None or empty, returns None (stripping disabled).
+    The special name ``'all'`` enables every known profile.
+    """
+    if not profiles:
+        return None
+
+    params: List[str] = []
+    if 'all' in profiles:
+        for profile_params in METADATA_STRIP_PROFILES.values():
+            params.extend(profile_params)
+    else:
+        for name in profiles:
+            profile_params = METADATA_STRIP_PROFILES.get(name)
+            if profile_params:
+                params.extend(profile_params)
+
+    return params if params else None
+
 
 def _get_write_strategy(ext: str) -> Optional[WriteStrategy]:
     ext_lower = ext.lower()
@@ -401,6 +435,7 @@ def _do_process_matched(et, info: MediaFileInfo, stats: MergeStats,
     if info.sidecar_path:
         _do_create_sidecar(et, info, stats, logger)
 
+    _do_strip_metadata(et, info, stats, logger)
     _do_set_filesystem_timestamps(et, info, logger)
 
 
@@ -482,6 +517,7 @@ def _do_process_orphan(et, info: MediaFileInfo, stats: MergeStats,
                 else:
                     logger.warning("Failed to update orphan %s: %s", info.source_path, e)
 
+    _do_strip_metadata(et, info, stats, logger)
     _do_set_filesystem_timestamps(et, info, logger)
 
 
@@ -556,9 +592,36 @@ def _do_set_filesystem_timestamps(et, info: MediaFileInfo, logger: logging.Logge
             logger.warning("Failed to set filesystem timestamps for %s: %s", info.source_path, e)
 
 
-# ---------------------------------------------------------------------------
-# Parallel worker — top-level function for ProcessPoolExecutor pickling
-# ---------------------------------------------------------------------------
+def _do_strip_metadata(et, info: MediaFileInfo, stats: MergeStats,
+                       logger: logging.Logger):
+    """Remove unwanted metadata groups from the output file.
+
+    Only runs when info.strip_metadata_params is set (non-None, non-empty).
+    Operates on the output file in-place after all other writes are complete.
+    Video containers that ExifTool cannot write to (AVI, MKV, WebM) are
+    skipped — their metadata lives in the XMP sidecar which is built fresh.
+    """
+    if not info.strip_metadata_params:
+        return
+    if not info.output_path or not info.output_path.exists():
+        return
+
+    # Non-QuickTime video containers are copy-only; ExifTool cannot modify
+    # them in-place, so there's nothing to strip from the file itself.
+    is_non_qt_video = (info.write_strategy == WriteStrategy.VIDEO_WITH_SIDECAR
+                       and info.source_path.suffix.lower() not in QUICKTIME_VIDEO_EXTS)
+    if is_non_qt_video:
+        return
+
+    params = ['-charset', 'filename=utf8', '-overwrite_original']
+    params.extend(info.strip_metadata_params)
+    params.append(str(info.output_path))
+    try:
+        _execute_et(et, params)
+        stats.metadata_stripped += 1
+        logger.debug("Stripped metadata from %s", info.output_path.name)
+    except Exception as e:
+        logger.debug("Metadata strip warnings for %s: %s", info.output_path.name, e)
 
 def _setup_worker_logging() -> logging.Logger:
     """Configure and return a logger for the current worker process."""
@@ -600,9 +663,11 @@ def _process_chunk(chunk: List[MediaFileInfo]) -> MergeStats:
 class GooglePhotosExportMerger(AbstractMediaMerger):
     def __init__(self, input_dir: str, output_dir: str, dry_run: bool = False,
                  blocked_descriptions: Optional[List[str]] = None,
-                 num_workers: int = 1):
+                 num_workers: int = 1,
+                 metadata_strip_params: Optional[List[str]] = None):
         super().__init__(input_dir, output_dir, dry_run, blocked_descriptions,
-                         num_workers=num_workers)
+                         num_workers=num_workers,
+                         metadata_strip_params=metadata_strip_params)
 
     def _open_writer(self) -> None:
         self._et_helper = exiftool.ExifToolHelper()
@@ -919,6 +984,7 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
                 info.description = info.json_data.get('description', '')
                 info.gps = _resolve_gps(info.json_data)
                 info.json_data = None
+            info.strip_metadata_params = self.metadata_strip_params
 
     def _process_matched(self, info: MediaFileInfo, stats: MergeStats):
         if self.dry_run:
@@ -961,7 +1027,9 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print(f"Usage: python {sys.argv[0]} <input_dir> <output_dir> [--dry-run] [--workers N]")
+        _profiles = ', '.join(METADATA_STRIP_PROFILES.keys())
+        print(f"Usage: python {sys.argv[0]} <input_dir> <output_dir> [--dry-run] [--workers N] [--strip-metadata [PROFILE ...]]")
+        print(f"\nStrip profiles: {_profiles}, all")
         sys.exit(1)
 
     input_dir = sys.argv[1]
@@ -978,6 +1046,22 @@ if __name__ == '__main__':
                 print(f"Invalid --workers value: {sys.argv[i + 1]}")
                 sys.exit(1)
 
+    # Parse --strip-metadata [PROFILE ...]
+    # With no profile names: enables all profiles.
+    # With profile names: enables only the listed profiles.
+    strip_profiles: Optional[List[str]] = None
+    for i, arg in enumerate(sys.argv):
+        if arg == '--strip-metadata':
+            profiles: List[str] = []
+            for j in range(i + 1, len(sys.argv)):
+                val = sys.argv[j]
+                if val.startswith('--'):
+                    break
+                profiles.append(val)
+            strip_profiles = profiles if profiles else ['all']
+            break
+    metadata_strip_params = _build_strip_params(strip_profiles)
+
     blocked_descriptions = [
         # Add unwanted description strings here, e.g.:
         # "Photo uploaded by Google Photos",
@@ -991,5 +1075,6 @@ if __name__ == '__main__':
 
     merger = GooglePhotosExportMerger(input_dir, output_dir, dry_run=dry_run,
                                      blocked_descriptions=blocked_descriptions,
-                                     num_workers=num_workers)
+                                     num_workers=num_workers,
+                                     metadata_strip_params=metadata_strip_params)
     result = merger.run()

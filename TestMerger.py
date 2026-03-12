@@ -974,6 +974,30 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         nikon_avi_path.write_bytes(_make_avi_with_nikon_dates('2014:07:12 12:38:02'))
         make_json_file(d / 'vid_xmp_nikon.avi.json', title='vid_xmp_nikon.avi')
 
+        # ── MetadataStripping ─────────────────────────────────────────
+        # JPEGs with XMP-GCamera and XMP-photoshop metadata pre-written.
+        # The main test class runs without --strip-metadata, so these tags
+        # must survive.  TestMetadataStripping runs a separate merger with
+        # stripping enabled and verifies the tags are removed.
+        d = inp / 'MetadataStripping'
+        make_media_file(d / 'strip_test.jpg')
+        make_json_file(d / 'strip_test.jpg.json', title='strip_test.jpg')
+        make_media_file(d / 'strip_test_ps.jpg')
+        make_json_file(d / 'strip_test_ps.jpg.json', title='strip_test_ps.jpg')
+        with exiftool.ExifToolHelper() as _et:
+            try:
+                _et.set_tags([str(d / 'strip_test.jpg')],
+                             {'XMP-GCamera:SpecialTypeID': '1'},
+                             params=['-overwrite_original'])
+            except Exception:
+                pass
+            try:
+                _et.set_tags([str(d / 'strip_test_ps.jpg')],
+                             {'XMP-photoshop:DocumentAncestors': 'ancestor_test_data'},
+                             params=['-overwrite_original'])
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -1124,6 +1148,8 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             'mismatch_photo.dng',
             # VideoXmpDates
             'vid_xmp.mp4', 'vid_xmp.avi', 'vid_xmp_nikon.avi',
+            # MetadataStripping
+            'strip_test.jpg', 'strip_test_ps.jpg',
         ]
 
         missing = [name for name in expected if name not in output_names]
@@ -2332,14 +2358,14 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     #   errors=0
 
     def test_stats_total_count(self) -> None:
-        """Total media files processed = 182 (175 matched + 7 orphans)."""
-        self.assertEqual(self.stats.total_media_files, 182,
-                         f"Expected 182 total, got {self.stats.total_media_files}")
+        """Total media files processed = 184 (177 matched + 7 orphans)."""
+        self.assertEqual(self.stats.total_media_files, 184,
+                         f"Expected 184 total, got {self.stats.total_media_files}")
 
     def test_stats_matched_count(self) -> None:
-        """Matched files (with JSON) = 175."""
-        self.assertEqual(self.stats.matched, 175,
-                         f"Expected 175 matched, got {self.stats.matched}")
+        """Matched files (with JSON) = 177."""
+        self.assertEqual(self.stats.matched, 177,
+                         f"Expected 177 matched, got {self.stats.matched}")
 
     def test_stats_orphan_count(self) -> None:
         """Orphan files (no JSON) = 7."""
@@ -2362,9 +2388,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 0 errors, got {self.stats.errors}")
 
     def test_stats_written_count(self) -> None:
-        """Files written = 182 (total_media_files when errors == 0)."""
-        self.assertEqual(self.stats.written, 182,
-                         f"Expected 182 written, got {self.stats.written}")
+        """Files written = 184 (total_media_files when errors == 0)."""
+        self.assertEqual(self.stats.written, 184,
+                         f"Expected 184 written, got {self.stats.written}")
 
     def test_stats_descriptions_cleared(self) -> None:
         """descriptions_cleared = 3 (desc_blocked.jpg + desc_blocked.png + desc_iptc_blocked.jpg)."""
@@ -2897,6 +2923,32 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                           f"vid_xmp_nikon.avi.xmp: {tag} missing timezone: {val!r}")
 
     # ------------------------------------------------------------------
+    # Metadata Stripping
+    # ------------------------------------------------------------------
+
+    def test_strip_metadata_default_off(self) -> None:
+        """Default merger run does not strip metadata (metadata_stripped == 0)."""
+        self.assertEqual(self.stats.metadata_stripped, 0)
+
+    def test_strip_metadata_preserved_when_off(self) -> None:
+        """When stripping is disabled, XMP-GCamera tags survive in the output."""
+        # ExifTool returns XMP tags under the family-1 group "XMP:" regardless
+        # of the specific namespace, so read using "XMP:SpecialTypeID".
+        tags = self._read_tags('strip_test.jpg', ['XMP:SpecialTypeID'])
+        val = tags.get('XMP:SpecialTypeID')
+        self.assertIsNotNone(val,
+            "strip_test.jpg: XMP-GCamera:SpecialTypeID should be preserved "
+            "when --strip-metadata is not used")
+
+    def test_strip_photoshop_preserved_when_off(self) -> None:
+        """When stripping is disabled, XMP-photoshop tags survive in the output."""
+        tags = self._read_tags('strip_test_ps.jpg', ['XMP:DocumentAncestors'])
+        val = tags.get('XMP:DocumentAncestors')
+        self.assertIsNotNone(val,
+            "strip_test_ps.jpg: XMP-photoshop:DocumentAncestors should be "
+            "preserved when --strip-metadata is not used")
+
+    # ------------------------------------------------------------------
     # Infrastructure Validation
     # ------------------------------------------------------------------
     # Tests that validate the test framework itself: failure detection,
@@ -3059,20 +3111,20 @@ class TestSingleWorker(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_serial_stats_total_count(self) -> None:
-        """Serial: total media files = 182."""
-        self.assertEqual(self.stats.total_media_files, 182)
+        """Serial: total media files = 184."""
+        self.assertEqual(self.stats.total_media_files, 184)
 
     def test_serial_stats_matched_count(self) -> None:
-        """Serial: matched files = 175."""
-        self.assertEqual(self.stats.matched, 175)
+        """Serial: matched files = 177."""
+        self.assertEqual(self.stats.matched, 177)
 
     def test_serial_stats_orphan_count(self) -> None:
         """Serial: orphan files = 7."""
         self.assertEqual(self.stats.orphans, 7)
 
     def test_serial_stats_written_count(self) -> None:
-        """Serial: written files = 182."""
-        self.assertEqual(self.stats.written, 182)
+        """Serial: written files = 184."""
+        self.assertEqual(self.stats.written, 184)
 
     def test_serial_stats_zero_errors(self) -> None:
         """Serial: zero errors."""
@@ -3144,6 +3196,124 @@ class TestSingleWorker(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Metadata stripping integration test
+# ---------------------------------------------------------------------------
+
+class TestMetadataStripping(unittest.TestCase):
+    """Run the merger with metadata stripping enabled and verify tags are removed.
+
+    Builds a minimal input tree with a single JPEG that has XMP-GCamera
+    metadata pre-written, runs the merger with strip params, and asserts
+    the metadata is gone from the output.
+    """
+
+    tmp_dir:    Path
+    input_dir:  Path
+    output_dir: Path
+    stats:      MergeStats
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp_dir    = Path(tempfile.mkdtemp(prefix='gpem_strip_test_'))
+        cls.input_dir  = cls.tmp_dir / 'input'
+        cls.output_dir = cls.tmp_dir / 'output'
+        cls.input_dir.mkdir()
+
+        # Create a JPEG with XMP-GCamera metadata
+        d = cls.input_dir / 'StripTest'
+        make_media_file(d / 'has_gcamera.jpg')
+        make_json_file(d / 'has_gcamera.jpg.json', title='has_gcamera.jpg')
+        make_media_file(d / 'has_photoshop.jpg')
+        make_json_file(d / 'has_photoshop.jpg.json', title='has_photoshop.jpg')
+        with exiftool.ExifToolHelper() as _et:
+            try:
+                _et.set_tags([str(d / 'has_gcamera.jpg')],
+                             {'XMP-GCamera:SpecialTypeID': '1'},
+                             params=['-overwrite_original'])
+            except Exception:
+                pass
+            try:
+                _et.set_tags([str(d / 'has_photoshop.jpg')],
+                             {'XMP-photoshop:DocumentAncestors': 'ancestor_test_data'},
+                             params=['-overwrite_original'])
+            except Exception:
+                pass
+
+        # Run merger with all strip profiles enabled
+        merger = GooglePhotosExportMerger(
+            str(cls.input_dir),
+            str(cls.output_dir),
+            num_workers=1,
+            metadata_strip_params=[
+                '-XMP-GCamera:All=', '-Google:All=',
+                '-Photoshop:All=', '-XMP-photoshop:DocumentAncestors=',
+            ],
+        )
+        cls.stats = merger.run()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        tmp = getattr(cls, 'tmp_dir', None)
+        if tmp is not None:
+            shutil.rmtree(str(tmp), ignore_errors=True)
+
+    def _find_output_file(self, name: str) -> 'Path | None':
+        for f in self.output_dir.rglob('*'):
+            if f.is_file() and f.name == name:
+                return f
+        return None
+
+    def _read_tags(self, name: str, tags: list) -> dict:
+        f = self._find_output_file(name)
+        if f is None:
+            return {}
+        with exiftool.ExifToolHelper() as et:
+            result = et.get_tags([str(f)], tags)
+            return result[0] if result else {}
+
+    def test_strip_file_exists(self) -> None:
+        """Output file is created when stripping is enabled."""
+        self.assertIsNotNone(self._find_output_file('has_gcamera.jpg'))
+        self.assertIsNotNone(self._find_output_file('has_photoshop.jpg'))
+
+    def test_strip_gcamera_removed(self) -> None:
+        """XMP-GCamera tags are removed from the output when stripping is enabled."""
+        tags = self._read_tags('has_gcamera.jpg', ['XMP:SpecialTypeID'])
+        val = tags.get('XMP:SpecialTypeID')
+        self.assertIsNone(val,
+            f"has_gcamera.jpg: XMP-GCamera:SpecialTypeID should be stripped, "
+            f"but found: {val!r}")
+
+    def test_strip_photoshop_removed(self) -> None:
+        """XMP-photoshop:DocumentAncestors is removed when stripping is enabled."""
+        tags = self._read_tags('has_photoshop.jpg', ['XMP:DocumentAncestors'])
+        val = tags.get('XMP:DocumentAncestors')
+        self.assertIsNone(val,
+            f"has_photoshop.jpg: XMP-photoshop:DocumentAncestors should be "
+            f"stripped, but found: {val!r}")
+
+    def test_strip_dates_preserved(self) -> None:
+        """Stripping metadata does not remove the dates written by the merger."""
+        for name in ('has_gcamera.jpg', 'has_photoshop.jpg'):
+            with self.subTest(file=name):
+                tags = self._read_tags(name,
+                                       ['EXIF:DateTimeOriginal', 'EXIF:CreateDate'])
+                dt = tags.get('EXIF:DateTimeOriginal') or tags.get('EXIF:CreateDate')
+                self.assertIsNotNone(dt,
+                    f"{name}: dates should survive metadata stripping")
+
+    def test_strip_stats_metadata_stripped(self) -> None:
+        """Stats reflect that metadata was stripped from both output files."""
+        self.assertEqual(self.stats.metadata_stripped, 2,
+                         f"Expected 2 metadata_stripped, got {self.stats.metadata_stripped}")
+
+    def test_strip_stats_zero_errors(self) -> None:
+        """No errors during the stripping merger run."""
+        self.assertEqual(self.stats.errors, 0,
+                         f"Expected 0 errors, got {self.stats.errors}")
+
+
+# ---------------------------------------------------------------------------
 if __name__ == '__main__':
 
     # ── Category mapping ─────────────────────────────────────────────────────
@@ -3177,6 +3347,7 @@ if __name__ == '__main__':
         ("EXIF Preservation",         ("test_preservation_",)),
         ("Extension Mismatch",        ("test_ext_mismatch_",)),
         ("Video XMP Dates",           ("test_video_xmp_",)),
+        ("Metadata Stripping",        ("test_strip_",)),
         ("Infrastructure Validation", ("test_infra_",)),
         ("Single Worker (serial)",    ("test_serial_",)),
     ]

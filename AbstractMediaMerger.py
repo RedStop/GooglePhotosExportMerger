@@ -39,6 +39,10 @@ class MediaFileInfo:
     # from the source file's extension (e.g. JPEG content with .DNG extension).
     # None when the extension matches or is unknown.
     actual_ext: Optional[str] = None
+    # ExifTool params for stripping unwanted metadata groups from the output
+    # file (e.g. ['-XMP-GCamera:All=', '-Google:All=']).  Set once during
+    # pre-extraction and shared across all files; None when stripping is off.
+    strip_metadata_params: Optional[List[str]] = None
 
 
 @dataclass
@@ -57,6 +61,7 @@ class MergeStats:
     descriptions_cleared: int = 0
     ext_mismatches: int = 0
     skipped_existing: int = 0
+    metadata_stripped: int = 0
 
     def merge(self, other: 'MergeStats') -> None:
         """Add all counters from *other* into this instance.
@@ -73,6 +78,7 @@ class MergeStats:
         self.gps_written += other.gps_written
         self.descriptions_cleared += other.descriptions_cleared
         self.skipped_existing += other.skipped_existing
+        self.metadata_stripped += other.metadata_stripped
 
 
 def _resolve_gps(json_data: Dict[str, Any]) -> Optional[Dict[str, float]]:
@@ -93,12 +99,14 @@ def _resolve_gps(json_data: Dict[str, Any]) -> Optional[Dict[str, float]]:
 
 class AbstractMediaMerger(ABC):
     def __init__(self, input_dir: str, output_dir: str, dry_run: bool = False,
-                 blocked_descriptions=None, num_workers: int = 1):
+                 blocked_descriptions=None, num_workers: int = 1,
+                 metadata_strip_params: Optional[List[str]] = None):
         self.input_path = Path(input_dir).resolve()
         self.output_path = Path(output_dir).resolve()
         self.dry_run = dry_run
         self.num_workers = max(1, num_workers)
         self.blocked_descriptions: set = set(blocked_descriptions) if blocked_descriptions else set()
+        self.metadata_strip_params: Optional[List[str]] = metadata_strip_params
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.DEBUG)
         if not self.logger.handlers:
@@ -320,6 +328,8 @@ class AbstractMediaMerger(ABC):
         self.logger.info("Ext mismatches fixed:         %d", stats.ext_mismatches)
         self.logger.info("Skipped (existing):           %d", stats.skipped_existing)
         self.logger.info("Errors:                       %d", stats.errors)
+        if stats.metadata_stripped > 0:
+            self.logger.info("Metadata stripped:            %d", stats.metadata_stripped)
         if stats.date_from_exif > 0:
             self.logger.info("Orphan dates from EXIF:       %d", stats.date_from_exif)
         if stats.date_from_filesystem > 0:

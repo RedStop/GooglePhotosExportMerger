@@ -134,13 +134,14 @@ Once your data is clean, run the merger to write JSON metadata into your media f
 ### Usage
 
 ```bash
-python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run] [--workers N]
+python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run] [--workers N] [--strip-metadata [PROFILE ...]]
 ```
 
 - `input_dir` — The root of your Google Photos Takeout export.
 - `output_dir` — Where to write the merged output. Will be created if it doesn't exist.
 - `--dry-run` — Simulate the merge without writing any files. Useful for previewing what would happen.
 - `--workers N` — Number of parallel worker processes for file processing. Defaults to the number of CPU cores. Each worker runs its own ExifTool instance. Use `--workers 1` to force single-process (serial) mode.
+- `--strip-metadata [PROFILE ...]` — Remove unwanted metadata groups from output files after writing. Off by default. With no profile names, all profiles are enabled. With profile names, only the listed profiles are used.
 
 ### What the merger does
 
@@ -190,6 +191,34 @@ blocked_descriptions = [
 ```
 
 When a blocked description is detected, the merger clears the description from `EXIF:UserComment`, `EXIF:ImageDescription`, and `XMP-dc:Description`. If the source file also has `IPTC:Caption-Abstract`, that is cleared too.
+
+---
+
+## Stripping unwanted metadata
+
+The merger can automatically remove unwanted metadata groups from output files via `--strip-metadata`. This runs as an additional ExifTool pass after all other writes are complete. Non-QuickTime video containers (AVI, MKV, WebM) are skipped since ExifTool cannot modify them in-place.
+
+### Strip profiles
+
+| Profile | What it removes |
+|---------|----------------|
+| `google` | `XMP-GCamera:All` (HDR+ maker notes), `Google:All` (payload frames, shot params, etc.) |
+| `photoshop` | `Photoshop:All` (layer data, slices, thumbnails), `XMP-photoshop:DocumentAncestors` |
+
+### Usage examples
+
+```bash
+# Strip all known metadata groups
+python GooglePhotosExportMerger.py input/ output/ --strip-metadata
+
+# Strip only Google metadata
+python GooglePhotosExportMerger.py input/ output/ --strip-metadata google
+
+# Strip Google and Photoshop metadata
+python GooglePhotosExportMerger.py input/ output/ --strip-metadata google photoshop
+```
+
+To add a new strip profile, add an entry to the `METADATA_STRIP_PROFILES` dict in `GooglePhotosExportMerger.py`.
 
 ---
 
