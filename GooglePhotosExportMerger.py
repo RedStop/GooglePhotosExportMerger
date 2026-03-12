@@ -45,12 +45,14 @@ DESC_READ_TAGS = ['EXIF:UserComment', 'EXIF:ImageDescription', 'XMP:Description'
 # the specific XMP namespace, so reads use "XMP:…" while writes must use
 # the fully-qualified "XMP-photoshop:…" / "XMP-xmp:…" form.
 CONDITIONAL_DATE_TAGS: Dict[str, Any] = {
-    'XMP:DateCreated':  lambda dt, tz: [f'-XMP-photoshop:DateCreated={dt}{tz}'],
-    'XMP:CreateDate':   lambda dt, tz: [f'-XMP-xmp:CreateDate={dt}{tz}'],
-    'XMP:MetadataDate': lambda dt, tz: [f'-XMP-xmp:MetadataDate={dt}{tz}'],
-    'XMP:ModifyDate':   lambda dt, tz: [f'-XMP-xmp:ModifyDate={dt}{tz}'],
-    'IPTC:DateCreated': lambda dt, tz: [f'-IPTC:DateCreated={dt[:10]}'],
-    'IPTC:TimeCreated': lambda dt, tz: [f'-IPTC:TimeCreated={dt[11:]}{tz}'],
+    'XMP:DateCreated':          lambda dt, tz: [f'-XMP-photoshop:DateCreated={dt}{tz}'],
+    'XMP:CreateDate':           lambda dt, tz: [f'-XMP-xmp:CreateDate={dt}{tz}'],
+    'XMP:MetadataDate':         lambda dt, tz: [f'-XMP-xmp:MetadataDate={dt}{tz}'],
+    'XMP:ModifyDate':           lambda dt, tz: [f'-XMP-xmp:ModifyDate={dt}{tz}'],
+    'IPTC:DateCreated':         lambda dt, tz: [f'-IPTC:DateCreated={dt[:10]}'],
+    'IPTC:TimeCreated':         lambda dt, tz: [f'-IPTC:TimeCreated={dt[11:]}{tz}'],
+    'IPTC:DigitalCreationDate': lambda dt, tz: [f'-IPTC:DigitalCreationDate={dt[:10]}'],
+    'IPTC:DigitalCreationTime': lambda dt, tz: [f'-IPTC:DigitalCreationTime={dt[11:]}{tz}'],
 }
 
 # Read-tag list for batch reads (keys of the mapping above).

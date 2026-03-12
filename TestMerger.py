@@ -867,10 +867,12 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         make_json_file(d / 'xmp_no_dates.jpg.json', title='xmp_no_dates.jpg')
 
         _conditional_date_tags = {
-            'XMP-photoshop:DateCreated': '2014:07:12 12:38:02',
-            'XMP-xmp:MetadataDate':      '2014:07:13 21:06:45+02:00',
-            'IPTC:DateCreated':          '2014:07:12',
-            'IPTC:TimeCreated':          '12:38:42+00:00',
+            'XMP-photoshop:DateCreated':  '2014:07:12 12:38:02',
+            'XMP-xmp:MetadataDate':       '2014:07:13 21:06:45+02:00',
+            'IPTC:DateCreated':           '2014:07:12',
+            'IPTC:TimeCreated':           '12:38:42+00:00',
+            'IPTC:DigitalCreationDate':   '2014:07:12',
+            'IPTC:DigitalCreationTime':   '12:38:42',
         }
         with exiftool.ExifToolHelper() as _et:
             try:
@@ -2563,6 +2565,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         tags = self._read_tags('xmp_dates.jpg', [
             'XMP:DateCreated', 'XMP:MetadataDate',
             'IPTC:DateCreated', 'IPTC:TimeCreated',
+            'IPTC:DigitalCreationDate', 'IPTC:DigitalCreationTime',
         ])
         # Default epoch 1723113846 → 2024:08:08 12:44:06+02:00 in GMT+2.
         # The old values (2014) should be replaced.
@@ -2590,11 +2593,24 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         self.assertIn('12:44:06', str(iptc_time),
                       f"IPTC:TimeCreated not updated: {iptc_time!r}")
 
+        dig_date = tags.get('IPTC:DigitalCreationDate')
+        self.assertIsNotNone(dig_date,
+                             "xmp_dates.jpg: IPTC:DigitalCreationDate should still exist")
+        self.assertIn('2024:08:08', str(dig_date),
+                      f"IPTC:DigitalCreationDate not updated: {dig_date!r}")
+
+        dig_time = tags.get('IPTC:DigitalCreationTime')
+        self.assertIsNotNone(dig_time,
+                             "xmp_dates.jpg: IPTC:DigitalCreationTime should still exist")
+        self.assertIn('12:44:06', str(dig_time),
+                      f"IPTC:DigitalCreationTime not updated: {dig_time!r}")
+
     def test_xmp_conditional_dates_absent_remain_absent(self) -> None:
         """Conditional date tags that were absent in the source are not added."""
         tags = self._read_tags('xmp_no_dates.jpg', [
             'XMP:DateCreated', 'XMP:MetadataDate',
             'IPTC:DateCreated', 'IPTC:TimeCreated',
+            'IPTC:DigitalCreationDate', 'IPTC:DigitalCreationTime',
         ])
         self.assertIsNone(tags.get('XMP:DateCreated'),
                           "xmp_no_dates.jpg: XMP:DateCreated should not be added")
@@ -2604,6 +2620,10 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                           "xmp_no_dates.jpg: IPTC:DateCreated should not be added")
         self.assertIsNone(tags.get('IPTC:TimeCreated'),
                           "xmp_no_dates.jpg: IPTC:TimeCreated should not be added")
+        self.assertIsNone(tags.get('IPTC:DigitalCreationDate'),
+                          "xmp_no_dates.jpg: IPTC:DigitalCreationDate should not be added")
+        self.assertIsNone(tags.get('IPTC:DigitalCreationTime'),
+                          "xmp_no_dates.jpg: IPTC:DigitalCreationTime should not be added")
 
     # ------------------------------------------------------------------
     # Infrastructure Validation
