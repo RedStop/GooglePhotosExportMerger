@@ -504,20 +504,31 @@ def _do_create_sidecar(et, info: MediaFileInfo,
         logger.warning("Failed to create XMP sidecar for %s: %s", info.source_path, e)
         return
 
-    # ExifTool's -o copies existing XMP from the source file before applying
-    # overrides.  Pre-existing tags (e.g. XMP-xmp:ModifyDate) win over the
-    # params we pass, so a second in-place pass is needed to fix them.
-    if info.resolved_datetime and info.existing_xmp_dates:
+    # ExifTool's -o copies existing metadata from the source file before
+    # applying overrides.  Pre-existing tags — including non-XMP dates
+    # (e.g. Nikon maker-note CreateDate) that ExifTool maps into XMP — win
+    # over the params we pass, so a second in-place pass is needed to force
+    # the correct values with timezone.
+    if info.resolved_datetime:
         dt_str = info.resolved_datetime.strftime('%Y:%m:%d %H:%M:%S')
         tz_str = _format_tz_offset(info.resolved_datetime.tzinfo)
-        fixup_params = _build_conditional_date_params(info, dt_str, tz_str)
-        if fixup_params:
-            fixup_params = ['-charset', 'filename=utf8', '-overwrite_original'] + fixup_params
-            fixup_params.append(str(info.sidecar_path))
-            try:
-                _execute_et(et, fixup_params)
-            except Exception as e:
-                logger.debug("Sidecar fixup warnings for %s: %s", info.sidecar_path.name, e)
+        local_with_tz = f'{dt_str}{tz_str}'
+        # Always force-write the three core sidecar date tags so that any
+        # values injected by -o from non-XMP sources are corrected.
+        fixup_params = [
+            '-charset', 'filename=utf8', '-overwrite_original',
+            f'-XMP-xmp:CreateDate={local_with_tz}',
+            f'-XMP-xmp:ModifyDate={local_with_tz}',
+            f'-XMP-exif:DateTimeOriginal={local_with_tz}',
+        ]
+        # Also fix any additional conditional XMP date tags that existed
+        # in the source file (e.g. XMP-photoshop:DateCreated).
+        fixup_params.extend(_build_conditional_date_params(info, dt_str, tz_str))
+        fixup_params.append(str(info.sidecar_path))
+        try:
+            _execute_et(et, fixup_params)
+        except Exception as e:
+            logger.debug("Sidecar fixup warnings for %s: %s", info.sidecar_path.name, e)
 
 
 def _do_set_filesystem_timestamps(et, info: MediaFileInfo, logger: logging.Logger):

@@ -220,6 +220,28 @@ def _make_avi() -> bytes:
     return b'RIFF' + struct.pack('<I', len(avi_data)) + avi_data
 
 
+def _make_avi_with_nikon_dates(dt_str: str = '2014:07:12 12:38:02') -> bytes:
+    """Minimal RIFF AVI with a Nikon 'ncdt' chunk containing DateTimeOriginal
+    and CreateDate (without timezone).  When ExifTool creates an XMP sidecar
+    via ``-o``, it maps these Nikon dates into XMP-xmp:CreateDate and
+    XMP-exif:DateTimeOriginal, overriding params we pass — exactly the bug
+    we're testing the fixup for."""
+    dt_bytes = dt_str.encode('ascii') + b'\x00'
+    # Tag 0x0013 = Nikon DateTimeOriginal, Tag 0x0014 = Nikon CreateDate
+    tag_0013 = struct.pack('<HH', 0x0013, len(dt_bytes)) + dt_bytes
+    tag_0014 = struct.pack('<HH', 0x0014, len(dt_bytes)) + dt_bytes
+    nctg_data = tag_0013 + tag_0014
+    nctg = b'nctg' + struct.pack('<I', len(nctg_data)) + nctg_data
+    ncdt = b'LIST' + struct.pack('<I', 4 + len(nctg)) + b'ncdt' + nctg
+
+    avih = b'avih' + struct.pack('<I', 56) + b'\x00' * 56
+    hdrl = b'LIST' + struct.pack('<I', 4 + len(avih)) + b'hdrl' + avih
+    movi = b'LIST' + struct.pack('<I', 4) + b'movi'
+    idx1 = b'idx1' + struct.pack('<I', 0)
+    avi_data = b'AVI ' + hdrl + movi + idx1 + ncdt
+    return b'RIFF' + struct.pack('<I', len(avi_data)) + avi_data
+
+
 def _make_ebml(doc_type: bytes) -> bytes:
     """Valid Matroska/WebM container with EBML header, SegmentInfo, and video track.
 
@@ -929,6 +951,16 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             # pre-write.  The sidecar should still get correct dates from
             # _build_sidecar_params.
 
+        # AVI with embedded Nikon maker-note dates (no timezone).  When
+        # ExifTool creates the XMP sidecar via -o, it maps these into
+        # XMP-xmp:CreateDate and XMP-exif:DateTimeOriginal, potentially
+        # overriding the parameterised values.  The sidecar fixup pass
+        # must correct them.
+        nikon_avi_path = d / 'vid_xmp_nikon.avi'
+        nikon_avi_path.parent.mkdir(parents=True, exist_ok=True)
+        nikon_avi_path.write_bytes(_make_avi_with_nikon_dates('2014:07:12 12:38:02'))
+        make_json_file(d / 'vid_xmp_nikon.avi.json', title='vid_xmp_nikon.avi')
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -1076,7 +1108,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             # ExtMismatch
             'mismatch_photo.dng',
             # VideoXmpDates
-            'vid_xmp.mp4', 'vid_xmp.avi',
+            'vid_xmp.mp4', 'vid_xmp.avi', 'vid_xmp_nikon.avi',
         ]
 
         missing = [name for name in expected if name not in output_names]
@@ -2279,14 +2311,14 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     #   errors=0
 
     def test_stats_total_count(self) -> None:
-        """Total media files processed = 180 (173 matched + 7 orphans)."""
-        self.assertEqual(self.stats.total_media_files, 180,
-                         f"Expected 180 total, got {self.stats.total_media_files}")
+        """Total media files processed = 181 (174 matched + 7 orphans)."""
+        self.assertEqual(self.stats.total_media_files, 181,
+                         f"Expected 181 total, got {self.stats.total_media_files}")
 
     def test_stats_matched_count(self) -> None:
-        """Matched files (with JSON) = 170."""
-        self.assertEqual(self.stats.matched, 173,
-                         f"Expected 173 matched, got {self.stats.matched}")
+        """Matched files (with JSON) = 174."""
+        self.assertEqual(self.stats.matched, 174,
+                         f"Expected 174 matched, got {self.stats.matched}")
 
     def test_stats_orphan_count(self) -> None:
         """Orphan files (no JSON) = 7."""
@@ -2299,9 +2331,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 101 GPS writes, got {self.stats.gps_written}")
 
     def test_stats_sidecars_created(self) -> None:
-        """XMP sidecars created = 82."""
-        self.assertEqual(self.stats.sidecars_created, 82,
-                         f"Expected 82 sidecars, got {self.stats.sidecars_created}")
+        """XMP sidecars created = 83."""
+        self.assertEqual(self.stats.sidecars_created, 83,
+                         f"Expected 83 sidecars, got {self.stats.sidecars_created}")
 
     def test_stats_zero_errors(self) -> None:
         """Merger reports zero errors for well-formed test data."""
@@ -2309,9 +2341,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 0 errors, got {self.stats.errors}")
 
     def test_stats_written_count(self) -> None:
-        """Files written = 180 (total_media_files when errors == 0)."""
-        self.assertEqual(self.stats.written, 180,
-                         f"Expected 180 written, got {self.stats.written}")
+        """Files written = 181 (total_media_files when errors == 0)."""
+        self.assertEqual(self.stats.written, 181,
+                         f"Expected 181 written, got {self.stats.written}")
 
     def test_stats_descriptions_cleared(self) -> None:
         """descriptions_cleared = 3 (desc_blocked.jpg + desc_blocked.png + desc_iptc_blocked.jpg)."""
@@ -2815,6 +2847,34 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             self.assertIn('+02:00', str(val),
                           f"vid_xmp.avi.xmp: {tag} missing timezone: {val!r}")
 
+    def test_video_xmp_nikon_avi_sidecar_exists(self) -> None:
+        """AVI with Nikon maker-note dates: sidecar is created."""
+        xmp = self._find_output_file('vid_xmp_nikon.avi.xmp')
+        self.assertIsNotNone(xmp, "vid_xmp_nikon.avi.xmp not found in output")
+
+    def test_video_xmp_nikon_avi_sidecar_dates(self) -> None:
+        """AVI with Nikon dates: sidecar XMP dates match resolved datetime."""
+        tags = self._read_tags('vid_xmp_nikon.avi.xmp', [
+            'XMP:DateTimeOriginal', 'XMP:CreateDate', 'XMP:ModifyDate',
+        ])
+        for tag in ('XMP:DateTimeOriginal', 'XMP:CreateDate', 'XMP:ModifyDate'):
+            val = tags.get(tag)
+            self.assertIsNotNone(val, f"vid_xmp_nikon.avi.xmp: {tag} missing")
+            self.assertIn('2024:08:08 12:44:06', str(val),
+                          f"vid_xmp_nikon.avi.xmp: {tag} not correct: {val!r}")
+
+    def test_video_xmp_nikon_avi_sidecar_dates_have_timezone(self) -> None:
+        """AVI with Nikon dates: sidecar fixup must override maker-note dates
+        that ExifTool's -o maps into XMP without timezone."""
+        tags = self._read_tags('vid_xmp_nikon.avi.xmp', [
+            'XMP:DateTimeOriginal', 'XMP:CreateDate', 'XMP:ModifyDate',
+        ])
+        for tag in ('XMP:DateTimeOriginal', 'XMP:CreateDate', 'XMP:ModifyDate'):
+            val = tags.get(tag)
+            self.assertIsNotNone(val, f"vid_xmp_nikon.avi.xmp: {tag} missing")
+            self.assertIn('+02:00', str(val),
+                          f"vid_xmp_nikon.avi.xmp: {tag} missing timezone: {val!r}")
+
     # ------------------------------------------------------------------
     # Infrastructure Validation
     # ------------------------------------------------------------------
@@ -2978,20 +3038,20 @@ class TestSingleWorker(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_serial_stats_total_count(self) -> None:
-        """Serial: total media files = 180."""
-        self.assertEqual(self.stats.total_media_files, 180)
+        """Serial: total media files = 181."""
+        self.assertEqual(self.stats.total_media_files, 181)
 
     def test_serial_stats_matched_count(self) -> None:
-        """Serial: matched files = 173."""
-        self.assertEqual(self.stats.matched, 173)
+        """Serial: matched files = 174."""
+        self.assertEqual(self.stats.matched, 174)
 
     def test_serial_stats_orphan_count(self) -> None:
         """Serial: orphan files = 7."""
         self.assertEqual(self.stats.orphans, 7)
 
     def test_serial_stats_written_count(self) -> None:
-        """Serial: written files = 180."""
-        self.assertEqual(self.stats.written, 180)
+        """Serial: written files = 181."""
+        self.assertEqual(self.stats.written, 181)
 
     def test_serial_stats_zero_errors(self) -> None:
         """Serial: zero errors."""
@@ -3002,8 +3062,8 @@ class TestSingleWorker(unittest.TestCase):
         self.assertEqual(self.stats.gps_written, 101)
 
     def test_serial_stats_sidecars_created(self) -> None:
-        """Serial: XMP sidecars created = 82."""
-        self.assertEqual(self.stats.sidecars_created, 82)
+        """Serial: XMP sidecars created = 83."""
+        self.assertEqual(self.stats.sidecars_created, 83)
 
     def test_serial_stats_descriptions_cleared(self) -> None:
         """Serial: descriptions cleared = 3."""
