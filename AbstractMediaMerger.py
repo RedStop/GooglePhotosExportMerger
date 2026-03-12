@@ -1,10 +1,24 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import enum
 import logging
+
+
+@dataclass
+class TimezoneOverride:
+    """Override the default timezone fallback for a specific UTC time range.
+
+    When a media file has no embedded timezone and its UTC timestamp falls
+    within [start_utc, end_utc], the given *tz* is used instead of the
+    system default (GMT+02:00).  Useful for travel photos taken in a
+    different timezone.
+    """
+    start_utc: datetime   # inclusive, must be timezone-aware (UTC)
+    end_utc:   datetime   # inclusive, must be timezone-aware (UTC)
+    tz:        timezone   # the timezone to apply
 
 
 class WriteStrategy(enum.Enum):
@@ -100,13 +114,15 @@ def _resolve_gps(json_data: Dict[str, Any]) -> Optional[Dict[str, float]]:
 class AbstractMediaMerger(ABC):
     def __init__(self, input_dir: str, output_dir: str, dry_run: bool = False,
                  blocked_descriptions=None, num_workers: int = 1,
-                 metadata_strip_params: Optional[List[str]] = None):
+                 metadata_strip_params: Optional[List[str]] = None,
+                 tz_overrides: Optional[List[TimezoneOverride]] = None):
         self.input_path = Path(input_dir).resolve()
         self.output_path = Path(output_dir).resolve()
         self.dry_run = dry_run
         self.num_workers = max(1, num_workers)
         self.blocked_descriptions: set = set(blocked_descriptions) if blocked_descriptions else set()
         self.metadata_strip_params: Optional[List[str]] = metadata_strip_params
+        self.tz_overrides: List[TimezoneOverride] = tz_overrides or []
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.setLevel(logging.DEBUG)
         if not self.logger.handlers:

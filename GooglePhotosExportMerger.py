@@ -1,5 +1,6 @@
 from AbstractMediaMerger import (AbstractMediaMerger, WriteStrategy,
-                                  MediaFileInfo, MergeStats, _resolve_gps)
+                                  MediaFileInfo, MergeStats, _resolve_gps,
+                                  TimezoneOverride)
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
@@ -152,6 +153,52 @@ def _parse_tz_offset(offset_str: str) -> Optional[timezone]:
 def _format_tz_offset(tz: timezone) -> str:
     """Format a timezone to '+HH:MM' string."""
     offset = tz.utcoffset(None)
+    total_seconds = int(offset.total_seconds())
+    sign = '+' if total_seconds >= 0 else '-'
+    total_seconds = abs(total_seconds)
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+
+def _find_tz_override(utc_dt: datetime,
+                      overrides: List[TimezoneOverride]) -> Optional[timezone]:
+    """Return the timezone from the first override whose range contains *utc_dt*.
+
+    Returns None if no override matches.
+    """
+    for ov in overrides:
+        if ov.start_utc <= utc_dt <= ov.end_utc:
+            return ov.tz
+    return None
+
+
+def _parse_tz_override(value: str) -> TimezoneOverride:
+    """Parse a --tz-override CLI value.
+
+    Format: "YYYY-MM-DD HH:MM:SS,YYYY-MM-DD HH:MM:SS,+HH:MM"
+    Times are UTC.  Returns a TimezoneOverride instance.
+    """
+    parts = value.split(',')
+    if len(parts) != 3:
+        raise ValueError(
+            f"Expected 'START_UTC,END_UTC,OFFSET' but got: {value!r}")
+    start_str, end_str, tz_str = [p.strip() for p in parts]
+    try:
+        start = datetime.strptime(start_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError(f"Invalid start UTC datetime: {start_str!r}")
+    try:
+        end = datetime.strptime(end_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError(f"Invalid end UTC datetime: {end_str!r}")
+    tz = _parse_tz_offset(tz_str)
+    if tz is None:
+        raise ValueError(f"Invalid timezone offset: {tz_str!r}")
+    if start > end:
+        raise ValueError(
+            f"Start UTC ({start_str}) is after end UTC ({end_str})")
+    return TimezoneOverride(start_utc=start, end_utc=end, tz=tz)
     total_seconds = int(offset.total_seconds())
     sign = '+' if total_seconds >= 0 else '-'
     total_seconds = abs(total_seconds)
@@ -664,10 +711,12 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
     def __init__(self, input_dir: str, output_dir: str, dry_run: bool = False,
                  blocked_descriptions: Optional[List[str]] = None,
                  num_workers: int = 1,
-                 metadata_strip_params: Optional[List[str]] = None):
+                 metadata_strip_params: Optional[List[str]] = None,
+                 tz_overrides: Optional[List[TimezoneOverride]] = None):
         super().__init__(input_dir, output_dir, dry_run, blocked_descriptions,
                          num_workers=num_workers,
-                         metadata_strip_params=metadata_strip_params)
+                         metadata_strip_params=metadata_strip_params,
+                         tz_overrides=tz_overrides)
 
     def _open_writer(self) -> None:
         self._et_helper = exiftool.ExifToolHelper()
@@ -873,8 +922,16 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
                             break
 
                 if tz is None:
-                    tz = GMT_PLUS_2
-                    self.logger.info("No timezone in EXIF for %s, using GMT+02:00 fallback", self._rel(info.source_path))
+                    utc_dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+                    override_tz = _find_tz_override(utc_dt, self.tz_overrides)
+                    if override_tz is not None:
+                        tz = override_tz
+                        self.logger.info("No timezone in EXIF for %s, using override %s",
+                                         self._rel(info.source_path), _format_tz_offset(tz))
+                    else:
+                        tz = GMT_PLUS_2
+                        self.logger.info("No timezone in EXIF for %s, using GMT+02:00 fallback",
+                                         self._rel(info.source_path))
 
                 utc_dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
                 local_dt = utc_dt.astimezone(tz)
@@ -932,7 +989,12 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
                         try:
                             # EXIF dates are typically "YYYY:MM:DD HH:MM:SS"
                             parsed = datetime.strptime(val.strip()[:19], '%Y:%m:%d %H:%M:%S')
-                            resolved_dt = parsed.replace(tzinfo=GMT_PLUS_2)
+                            # Check tz overrides: use the naive date as a UTC
+                            # approximation for range matching.
+                            approx_utc = parsed.replace(tzinfo=timezone.utc)
+                            override_tz = _find_tz_override(approx_utc, self.tz_overrides)
+                            fallback_tz = override_tz if override_tz is not None else GMT_PLUS_2
+                            resolved_dt = parsed.replace(tzinfo=fallback_tz)
                             date_source = tag_key
                             stats.date_from_exif += 1
                             break
@@ -943,7 +1005,10 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
                     # Last resort: file creation date
                     try:
                         ctime = info.source_path.stat().st_ctime
-                        resolved_dt = datetime.fromtimestamp(ctime, tz=GMT_PLUS_2)
+                        utc_ctime = datetime.fromtimestamp(ctime, tz=timezone.utc)
+                        override_tz = _find_tz_override(utc_ctime, self.tz_overrides)
+                        fallback_tz = override_tz if override_tz is not None else GMT_PLUS_2
+                        resolved_dt = datetime.fromtimestamp(ctime, tz=fallback_tz)
                         date_source = 'file_creation_date'
                         stats.date_from_filesystem += 1
                         self.logger.warning("Using file creation date for orphan: %s", self._rel(info.source_path))
@@ -1028,8 +1093,11 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         _profiles = ', '.join(METADATA_STRIP_PROFILES.keys())
-        print(f"Usage: python {sys.argv[0]} <input_dir> <output_dir> [--dry-run] [--workers N] [--strip-metadata [PROFILE ...]]")
+        print(f"Usage: python {sys.argv[0]} <input_dir> <output_dir> [--dry-run] [--workers N]")
+        print(f"       [--strip-metadata [PROFILE ...]] [--tz-override \"START_UTC,END_UTC,OFFSET\" ...]")
         print(f"\nStrip profiles: {_profiles}, all")
+        print(f"\nTimezone override example:")
+        print(f'  --tz-override "2019-11-20 02:00:00,2019-11-22 17:00:50,-05:30"')
         sys.exit(1)
 
     input_dir = sys.argv[1]
@@ -1062,6 +1130,16 @@ if __name__ == '__main__':
             break
     metadata_strip_params = _build_strip_params(strip_profiles)
 
+    # Parse --tz-override "START_UTC,END_UTC,OFFSET" (repeatable)
+    tz_overrides: List[TimezoneOverride] = []
+    for i, arg in enumerate(sys.argv):
+        if arg == '--tz-override' and i + 1 < len(sys.argv):
+            try:
+                tz_overrides.append(_parse_tz_override(sys.argv[i + 1]))
+            except ValueError as e:
+                print(f"Invalid --tz-override: {e}")
+                sys.exit(1)
+
     blocked_descriptions = [
         # Add unwanted description strings here, e.g.:
         # "Photo uploaded by Google Photos",
@@ -1076,5 +1154,6 @@ if __name__ == '__main__':
     merger = GooglePhotosExportMerger(input_dir, output_dir, dry_run=dry_run,
                                      blocked_descriptions=blocked_descriptions,
                                      num_workers=num_workers,
-                                     metadata_strip_params=metadata_strip_params)
+                                     metadata_strip_params=metadata_strip_params,
+                                     tz_overrides=tz_overrides or None)
     result = merger.run()

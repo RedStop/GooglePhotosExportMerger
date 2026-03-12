@@ -18,6 +18,7 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict
 
 import exiftool
@@ -3311,6 +3312,183 @@ class TestMetadataStripping(unittest.TestCase):
         """No errors during the stripping merger run."""
         self.assertEqual(self.stats.errors, 0,
                          f"Expected 0 errors, got {self.stats.errors}")
+
+
+# ---------------------------------------------------------------------------
+# Timezone override integration test
+# ---------------------------------------------------------------------------
+
+class TestTimezoneOverride(unittest.TestCase):
+    """Run the merger with --tz-override and verify timezone selection.
+
+    Builds a minimal input tree with three files whose JSON photoTakenTime
+    epochs span different dates:
+      - inside the override range  → should use the override timezone
+      - outside the override range → should use GMT+02:00 fallback
+      - has embedded EXIF timezone → should use EXIF timezone (override ignored)
+
+    None of the test files have embedded EXIF timezone offsets (except the
+    third), so the override/fallback logic is exercised.
+    """
+
+    tmp_dir:    Path
+    input_dir:  Path
+    output_dir: Path
+    stats:      MergeStats
+
+    # Override range: 2019-11-25 00:00:00 UTC  to  2019-11-28 23:59:59 UTC
+    # Override timezone: -05:30
+    # File epochs:
+    #   in_range:     1574870400  = 2019-11-27 16:00:00 UTC → should get -05:30
+    #   out_of_range: 1574524800  = 2019-11-23 16:00:00 UTC → should get +02:00
+    #   has_exif_tz:  1574870400  = 2019-11-27 16:00:00 UTC → but has +08:00 in EXIF
+
+    _EPOCH_IN_RANGE     = '1574870400'   # 2019-11-27 16:00:00 UTC
+    _EPOCH_OUT_OF_RANGE = '1574524800'   # 2019-11-23 16:00:00 UTC
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from AbstractMediaMerger import TimezoneOverride
+
+        cls.tmp_dir    = Path(tempfile.mkdtemp(prefix='gpem_tz_override_test_'))
+        cls.input_dir  = cls.tmp_dir / 'input'
+        cls.output_dir = cls.tmp_dir / 'output'
+        cls.input_dir.mkdir()
+
+        d = cls.input_dir / 'TzOverride'
+
+        # File in the override range (no EXIF timezone)
+        make_media_file(d / 'tz_in_range.jpg')
+        make_json_file(d / 'tz_in_range.jpg.json',
+                       title='tz_in_range.jpg',
+                       photoTakenTime={'timestamp': cls._EPOCH_IN_RANGE, 'formatted': ''})
+
+        # File outside the override range (no EXIF timezone)
+        make_media_file(d / 'tz_out_of_range.jpg')
+        make_json_file(d / 'tz_out_of_range.jpg.json',
+                       title='tz_out_of_range.jpg',
+                       photoTakenTime={'timestamp': cls._EPOCH_OUT_OF_RANGE, 'formatted': ''})
+
+        # File in range BUT has EXIF timezone → EXIF should win
+        p = d / 'tz_has_exif.jpg'
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(_make_jpeg_with_exif_tz('+08:00'))
+        make_json_file(d / 'tz_has_exif.jpg.json',
+                       title='tz_has_exif.jpg',
+                       photoTakenTime={'timestamp': cls._EPOCH_IN_RANGE, 'formatted': ''})
+
+        # An AVI file in range (no EXIF timezone) — tests sidecar dates too
+        make_media_file(d / 'tz_in_range.avi')
+        make_json_file(d / 'tz_in_range.avi.json',
+                       title='tz_in_range.avi',
+                       photoTakenTime={'timestamp': cls._EPOCH_IN_RANGE, 'formatted': ''})
+
+        # Override: 2019-11-25 00:00:00 UTC to 2019-11-28 23:59:59 UTC → -05:30
+        override = TimezoneOverride(
+            start_utc=datetime(2019, 11, 25, 0, 0, 0, tzinfo=timezone.utc),
+            end_utc=datetime(2019, 11, 28, 23, 59, 59, tzinfo=timezone.utc),
+            tz=timezone(timedelta(hours=-5, minutes=-30)),
+        )
+
+        merger = GooglePhotosExportMerger(
+            str(cls.input_dir),
+            str(cls.output_dir),
+            num_workers=1,
+            tz_overrides=[override],
+        )
+        cls.stats = merger.run()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        tmp = getattr(cls, 'tmp_dir', None)
+        if tmp is not None:
+            shutil.rmtree(str(tmp), ignore_errors=True)
+
+    def _find_output_file(self, name: str) -> 'Path | None':
+        for f in self.output_dir.rglob('*'):
+            if f.is_file() and f.name == name:
+                return f
+        return None
+
+    def _read_tags(self, name: str, tags: list) -> dict:
+        f = self._find_output_file(name)
+        if f is None:
+            return {}
+        with exiftool.ExifToolHelper() as et:
+            result = et.get_tags([str(f)], tags)
+            return result[0] if result else {}
+
+    def test_tz_override_zero_errors(self) -> None:
+        """No errors during the override merger run."""
+        self.assertEqual(self.stats.errors, 0,
+                         f"Expected 0 errors, got {self.stats.errors}")
+
+    def test_tz_override_in_range_uses_override(self) -> None:
+        """File in range: DateTimeOriginal uses the override timezone -05:30.
+
+        epoch 1574870400 = 2019-11-27 16:00:00 UTC → -05:30 → 10:30:00.
+        """
+        tags = self._read_tags('tz_in_range.jpg',
+                               ['EXIF:DateTimeOriginal', 'EXIF:OffsetTimeOriginal'])
+        dt = str(tags.get('EXIF:DateTimeOriginal', ''))
+        offset = str(tags.get('EXIF:OffsetTimeOriginal', ''))
+        self.assertIn('2019:11:27 10:30:00', dt,
+                      f"Expected 10:30:00 (-05:30 from UTC 16:00), got {dt!r}")
+        self.assertIn('-05:30', offset,
+                      f"Expected offset -05:30, got {offset!r}")
+
+    def test_tz_override_out_of_range_uses_fallback(self) -> None:
+        """File outside range: DateTimeOriginal uses the GMT+02:00 fallback.
+
+        epoch 1574524800 = 2019-11-23 16:00:00 UTC → +02:00 → 18:00:00.
+        """
+        tags = self._read_tags('tz_out_of_range.jpg',
+                               ['EXIF:DateTimeOriginal', 'EXIF:OffsetTimeOriginal'])
+        dt = str(tags.get('EXIF:DateTimeOriginal', ''))
+        offset = str(tags.get('EXIF:OffsetTimeOriginal', ''))
+        self.assertIn('2019:11:23 18:00:00', dt,
+                      f"Expected 18:00:00 (+02:00 from UTC 16:00), got {dt!r}")
+        self.assertIn('+02:00', offset,
+                      f"Expected offset +02:00, got {offset!r}")
+
+    def test_tz_override_exif_wins_over_override(self) -> None:
+        """File with embedded EXIF timezone: EXIF wins, override is ignored.
+
+        epoch 1574870400 = 2019-11-27 16:00:00 UTC → +08:00 → 2019-11-28 00:00:00.
+        """
+        tags = self._read_tags('tz_has_exif.jpg',
+                               ['EXIF:DateTimeOriginal', 'EXIF:OffsetTimeOriginal'])
+        dt = str(tags.get('EXIF:DateTimeOriginal', ''))
+        offset = str(tags.get('EXIF:OffsetTimeOriginal', ''))
+        self.assertIn('2019:11:28 00:00:00', dt,
+                      f"Expected 00:00:00 (+08:00 from UTC 16:00), got {dt!r}")
+        self.assertIn('+08:00', offset,
+                      f"Expected offset +08:00, got {offset!r}")
+
+    def test_tz_override_sidecar_has_override_tz(self) -> None:
+        """AVI sidecar in range: XMP dates use the override timezone -05:30.
+
+        epoch 1574870400 = 2019-11-27 16:00:00 UTC → -05:30 → 10:30:00.
+        """
+        tags = self._read_tags('tz_in_range.avi.xmp',
+                               ['XMP:DateTimeOriginal', 'XMP:CreateDate'])
+        for tag in ('XMP:DateTimeOriginal', 'XMP:CreateDate'):
+            val = str(tags.get(tag, ''))
+            with self.subTest(tag=tag):
+                self.assertIn('2019:11:27 10:30:00', val,
+                              f"Expected 10:30:00, got {val!r}")
+                self.assertIn('-05:30', val,
+                              f"Expected -05:30 in {val!r}")
+
+    def test_tz_override_output_organized_by_override_date(self) -> None:
+        """File in range is organized by the local date in the override timezone.
+
+        2019-11-27 06:30:00 -05:30 → year=2019, month=11.
+        """
+        f = self._find_output_file('tz_in_range.jpg')
+        self.assertIsNotNone(f, "tz_in_range.jpg not found in output")
+        self.assertIn('2019', str(f))
+        self.assertIn('11', str(f))
 
 
 # ---------------------------------------------------------------------------

@@ -134,7 +134,7 @@ Once your data is clean, run the merger to write JSON metadata into your media f
 ### Usage
 
 ```bash
-python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run] [--workers N] [--strip-metadata [PROFILE ...]]
+python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run] [--workers N] [--strip-metadata [PROFILE ...]] [--tz-override "START_UTC,END_UTC,OFFSET" ...]
 ```
 
 - `input_dir` — The root of your Google Photos Takeout export.
@@ -142,6 +142,7 @@ python GooglePhotosExportMerger.py <input_dir> <output_dir> [--dry-run] [--worke
 - `--dry-run` — Simulate the merge without writing any files. Useful for previewing what would happen.
 - `--workers N` — Number of parallel worker processes for file processing. Defaults to the number of CPU cores. Each worker runs its own ExifTool instance. Use `--workers 1` to force single-process (serial) mode.
 - `--strip-metadata [PROFILE ...]` — Remove unwanted metadata groups from output files after writing. Off by default. With no profile names, all profiles are enabled. With profile names, only the listed profiles are used.
+- `--tz-override "START_UTC,END_UTC,OFFSET"` — Override the default timezone fallback (GMT+02:00) for files whose UTC timestamp falls within the given range. Repeatable for multiple ranges. Only applies to files with no embedded EXIF timezone. Times are UTC in `YYYY-MM-DD HH:MM:SS` format. See [Timezone overrides for travel photos](#timezone-overrides-for-travel-photos) below.
 
 ### What the merger does
 
@@ -151,7 +152,7 @@ The merger follows a 9-step pipeline:
 2. **Scan files** — walks the input tree and groups files by directory.
 3. **Match metadata to media** — pairs each JSON metadata file to its corresponding media file using `JsonFileIdentifier`.
 4. **Identify orphans** — finds media files with no matching JSON.
-5. **Resolve dates and output paths** — determines the datetime for each file from the JSON `photoTakenTime` timestamp combined with the EXIF timezone offset (falls back to GMT+02:00 if no timezone is found). Assigns a write strategy and output path (`YYYY/MM/filename`).
+5. **Resolve dates and output paths** — determines the datetime for each file from the JSON `photoTakenTime` timestamp combined with the EXIF timezone offset. When no EXIF timezone is found, checks any `--tz-override` ranges before falling back to GMT+02:00. Assigns a write strategy and output path (`YYYY/MM/filename`).
 6. **Resolve duplicate filenames** — appends `_2`, `_3`, etc. when multiple files resolve to the same output name (including renaming associated sidecars).
 7. **Process matched files** — writes metadata (dates with timezone, descriptions, GPS coordinates) into EXIF tags using ExifTool. Creates XMP sidecars where needed.
 8. **Process orphan files** — copies to the output directory. Dates are resolved from existing EXIF tags or the filesystem creation date.
@@ -191,6 +192,38 @@ blocked_descriptions = [
 ```
 
 When a blocked description is detected, the merger clears the description from `EXIF:UserComment`, `EXIF:ImageDescription`, and `XMP-dc:Description`. If the source file also has `IPTC:Caption-Abstract`, that is cleared too.
+
+---
+
+## Timezone overrides for travel photos
+
+When the merger cannot determine a timezone from a media file's EXIF data (common for video files and some cameras), it falls back to GMT+02:00. This is incorrect for photos taken while travelling in a different timezone.
+
+The `--tz-override` option lets you specify UTC time ranges and the timezone that should be used instead of the fallback. This applies to both matched files (with JSON) and orphan files (without JSON). Files that already have an embedded EXIF timezone are not affected — the EXIF timezone always takes priority.
+
+### Format
+
+```
+--tz-override "START_UTC,END_UTC,OFFSET"
+```
+
+- `START_UTC` and `END_UTC` — UTC datetimes in `YYYY-MM-DD HH:MM:SS` format (inclusive range).
+- `OFFSET` — timezone offset in `+HH:MM` or `-HH:MM` format.
+
+### Examples
+
+```bash
+# Single trip: India (UTC+05:30), Nov 20-22 2019
+python GooglePhotosExportMerger.py input/ output/ \
+  --tz-override "2019-11-20 02:00:00,2019-11-22 17:00:50,+05:30"
+
+# Two trips: Japan then New York
+python GooglePhotosExportMerger.py input/ output/ \
+  --tz-override "2023-03-10 00:00:00,2023-03-20 23:59:59,+09:00" \
+  --tz-override "2023-06-01 00:00:00,2023-06-15 23:59:59,-04:00"
+```
+
+When multiple overrides are specified, the first matching range wins. If no override matches, the default GMT+02:00 fallback is used.
 
 ---
 
