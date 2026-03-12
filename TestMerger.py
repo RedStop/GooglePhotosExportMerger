@@ -1860,17 +1860,38 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                 self.assertFalse(tags.get(xmp_tag),
                                  f"{name}: unexpected XMP:Description in orphan output")
 
-    def test_orphan_copy_fidelity(self) -> None:
-        """Orphan output bytes are byte-for-byte identical to the input (no modifications)."""
-        for name, subdir in self._ORPHAN_CASES:
+    def test_orphan_dates_written(self) -> None:
+        """Orphan outputs have date tags and timezone offsets filled in from resolved_datetime."""
+        from datetime import timezone, timedelta
+        gmt2 = timezone(timedelta(hours=2))
+
+        # DIRECT orphans (JPG) should have EXIF dates + OffsetTime.
+        for name in ('orphan.jpg',):
             with self.subTest(file=name):
-                src = self.input_dir / subdir / name
-                out = self._find_output_file(name)
-                self.assertIsNotNone(out, f"Orphan {name!r} not found in output")
-                self.assertEqual(
-                    src.read_bytes(), out.read_bytes(),
-                    f"{name}: output bytes differ from input (orphan should be unmodified)",
-                )
+                tags = self._read_tags(name, [
+                    'EXIF:DateTimeOriginal', 'EXIF:CreateDate', 'EXIF:ModifyDate',
+                    'EXIF:OffsetTimeOriginal',
+                ])
+                self.assertIsNotNone(tags.get('EXIF:DateTimeOriginal'),
+                                     f"{name}: missing EXIF:DateTimeOriginal")
+                self.assertIsNotNone(tags.get('EXIF:CreateDate'),
+                                     f"{name}: missing EXIF:CreateDate")
+                self.assertIsNotNone(tags.get('EXIF:ModifyDate'),
+                                     f"{name}: missing EXIF:ModifyDate")
+                offset = tags.get('EXIF:OffsetTimeOriginal')
+                self.assertIsNotNone(offset,
+                                     f"{name}: missing EXIF:OffsetTimeOriginal")
+                self.assertIn('+02:00', str(offset),
+                              f"{name}: expected +02:00, got {offset!r}")
+
+        # PARTIAL_WITH_SIDECAR orphans (PNG, GIF) should have XMP dates with tz.
+        for name in ('orphan.png', 'orphan.gif'):
+            with self.subTest(file=name):
+                tags = self._read_tags(name, ['XMP:DateTimeOriginal', 'XMP:CreateDate'])
+                dt = tags.get('XMP:DateTimeOriginal') or tags.get('XMP:CreateDate')
+                self.assertIsNotNone(dt, f"{name}: missing XMP date tag")
+                self.assertIn('+02:00', str(dt),
+                              f"{name}: expected +02:00 timezone in XMP date, got {dt!r}")
 
     # ------------------------------------------------------------------
     # Category 8 — XMP Sidecars

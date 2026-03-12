@@ -250,21 +250,54 @@ def _do_process_orphan(et, info: MediaFileInfo, stats: MergeStats,
         stats.errors += 1
         return
 
+    # Build params for in-place updates (descriptions + dates).
+    update_params = ['-charset', 'filename=utf8', '-overwrite_original']
+
     if info.clear_descriptions:
+        update_params.append('-EXIF:UserComment=')
+        update_params.append('-EXIF:ImageDescription=')
+        update_params.append('-XMP-dc:Description=')
+        if info.has_iptc_caption:
+            update_params.append('-IPTC:Caption-Abstract=')
+        stats.descriptions_cleared += 1
+
+    # Fill in any missing date tags and add timezone offsets.
+    if info.resolved_datetime:
+        dt_str = info.resolved_datetime.strftime('%Y:%m:%d %H:%M:%S')
+        tz_str = _format_tz_offset(info.resolved_datetime.tzinfo)
+
+        if info.write_strategy == WriteStrategy.VIDEO_WITH_SIDECAR:
+            utc_dt = info.resolved_datetime.astimezone(timezone.utc)
+            utc_str = utc_dt.strftime('%Y:%m:%d %H:%M:%S')
+            update_params.append(f'-QuickTime:CreateDate={utc_str}')
+            update_params.append(f'-QuickTime:ModifyDate={utc_str}')
+            local_with_tz = f'{dt_str}{tz_str}'
+            update_params.append(f'-UserData:DateTimeOriginal={local_with_tz}')
+            update_params.append(f'-XMP-exif:DateTimeOriginal={local_with_tz}')
+            update_params.append(f'-XMP-xmp:CreateDate={local_with_tz}')
+            update_params.append(f'-XMP-xmp:ModifyDate={local_with_tz}')
+        elif info.write_strategy == WriteStrategy.PARTIAL_WITH_SIDECAR:
+            local_with_tz = f'{dt_str}{tz_str}'
+            update_params.append(f'-XMP-exif:DateTimeOriginal={local_with_tz}')
+            update_params.append(f'-XMP-xmp:CreateDate={local_with_tz}')
+            update_params.append(f'-XMP-xmp:ModifyDate={local_with_tz}')
+        else:
+            update_params.append(f'-alldates={dt_str}')
+            update_params.append(f'-EXIF:ExifIFD:OffsetTime={tz_str}')
+            update_params.append(f'-EXIF:ExifIFD:OffsetTimeOriginal={tz_str}')
+            update_params.append(f'-EXIF:ExifIFD:OffsetTimeDigitized={tz_str}')
+
+    # Only call ExifTool if there are tag params beyond the base three
+    # (charset, filename, overwrite_original).
+    if len(update_params) > 3:
+        update_params.append(str(info.output_path))
         try:
-            clear_params = [
-                '-overwrite_original',
-                '-EXIF:UserComment=',
-                '-EXIF:ImageDescription=',
-                '-XMP-dc:Description=',
-            ]
-            if info.has_iptc_caption:
-                clear_params.append('-IPTC:Caption-Abstract=')
-            clear_params.append(str(info.output_path))
-            _execute_et(et, clear_params)
-            stats.descriptions_cleared += 1
+            _execute_et(et, update_params)
         except Exception as e:
-            logger.warning("Failed to clear descriptions for orphan %s: %s", info.source_path, e)
+            if info.output_path.exists():
+                logger.debug("ExifTool warnings for orphan %s: %s", info.source_path, e)
+            else:
+                logger.warning("Failed to update orphan %s: %s", info.source_path, e)
 
     _do_set_filesystem_timestamps(et, info, logger)
 
