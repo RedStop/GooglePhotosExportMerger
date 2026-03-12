@@ -55,14 +55,16 @@ class MergeStats:
     date_from_filesystem: int = 0
     gps_written: int = 0
     descriptions_cleared: int = 0
+    ext_mismatches: int = 0
 
     def merge(self, other: 'MergeStats') -> None:
         """Add all counters from *other* into this instance.
 
         Used to aggregate partial stats returned by parallel workers.
         Only processing counters are merged; pipeline-level counters
-        (total_media_files, matched, orphans, skipped_json, duplicates_renamed)
-        are set before parallelisation and should not be summed again.
+        (total_media_files, matched, orphans, skipped_json, duplicates_renamed,
+        ext_mismatches) are set before parallelisation and should not be
+        summed again.
         """
         self.written += other.written
         self.sidecars_created += other.sidecars_created
@@ -313,6 +315,7 @@ class AbstractMediaMerger(ABC):
         self.logger.info("Descriptions cleared:         %d", stats.descriptions_cleared)
         self.logger.info("Duplicates renamed:           %d", stats.duplicates_renamed)
         self.logger.info("Skipped JSON files:           %d", stats.skipped_json)
+        self.logger.info("Ext mismatches fixed:         %d", stats.ext_mismatches)
         self.logger.info("Errors:                       %d", stats.errors)
         if stats.date_from_exif > 0:
             self.logger.info("Orphan dates from EXIF:       %d", stats.date_from_exif)

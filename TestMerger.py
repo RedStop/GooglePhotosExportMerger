@@ -881,6 +881,28 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             except Exception:
                 pass
 
+        # ── ExtMismatch ───────────────────────────────────────────────────
+        # A JPEG file disguised with a .dng extension (content/extension
+        # mismatch).  The merger should detect this, temporarily rename for
+        # ExifTool, write tags correctly, and keep the JSON title.
+        d = inp / 'ExtMismatch'
+        # Write JPEG bytes to a .dng path (simulates Google Photos export quirk).
+        mismatch_path = d / 'mismatch_photo.dng'
+        mismatch_path.parent.mkdir(parents=True, exist_ok=True)
+        mismatch_path.write_bytes(_MEDIA_BYTES['.jpg'])
+        make_json_file(d / 'mismatch_photo.dng.json',
+                       title='mismatch_photo.dng',
+                       geoData={
+                           'latitude': -25.78, 'longitude': 28.28,
+                           'altitude': 1376.0,
+                           'latitudeSpan': 0.0, 'longitudeSpan': 0.0,
+                       },
+                       geoDataExif={
+                           'latitude': -25.78, 'longitude': 28.28,
+                           'altitude': 1376.0,
+                           'latitudeSpan': 0.0, 'longitudeSpan': 0.0,
+                       })
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -1025,6 +1047,8 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             'preserve_png.png', 'preserve_gif.gif',
             # XmpConditionalDates
             'xmp_dates.jpg', 'xmp_no_dates.jpg',
+            # ExtMismatch
+            'mismatch_photo.dng',
         ]
 
         missing = [name for name in expected if name not in output_names]
@@ -2227,14 +2251,14 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     #   errors=0
 
     def test_stats_total_count(self) -> None:
-        """Total media files processed = 177 (170 matched + 7 orphans)."""
-        self.assertEqual(self.stats.total_media_files, 177,
-                         f"Expected 177 total, got {self.stats.total_media_files}")
+        """Total media files processed = 178 (171 matched + 7 orphans)."""
+        self.assertEqual(self.stats.total_media_files, 178,
+                         f"Expected 178 total, got {self.stats.total_media_files}")
 
     def test_stats_matched_count(self) -> None:
         """Matched files (with JSON) = 170."""
-        self.assertEqual(self.stats.matched, 170,
-                         f"Expected 170 matched, got {self.stats.matched}")
+        self.assertEqual(self.stats.matched, 171,
+                         f"Expected 171 matched, got {self.stats.matched}")
 
     def test_stats_orphan_count(self) -> None:
         """Orphan files (no JSON) = 7."""
@@ -2242,9 +2266,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 7 orphans, got {self.stats.orphans}")
 
     def test_stats_gps_written(self) -> None:
-        """GPS tags written = 100 (98 GPS Tests + sc_png + sc_avi)."""
-        self.assertEqual(self.stats.gps_written, 100,
-                         f"Expected 100 GPS writes, got {self.stats.gps_written}")
+        """GPS tags written = 101 (98 GPS Tests + mismatch_photo + sc_png + sc_avi)."""
+        self.assertEqual(self.stats.gps_written, 101,
+                         f"Expected 101 GPS writes, got {self.stats.gps_written}")
 
     def test_stats_sidecars_created(self) -> None:
         """XMP sidecars created = 80."""
@@ -2257,9 +2281,9 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 0 errors, got {self.stats.errors}")
 
     def test_stats_written_count(self) -> None:
-        """Files written = 177 (total_media_files when errors == 0)."""
-        self.assertEqual(self.stats.written, 177,
-                         f"Expected 177 written, got {self.stats.written}")
+        """Files written = 178 (total_media_files when errors == 0)."""
+        self.assertEqual(self.stats.written, 178,
+                         f"Expected 178 written, got {self.stats.written}")
 
     def test_stats_descriptions_cleared(self) -> None:
         """descriptions_cleared = 3 (desc_blocked.jpg + desc_blocked.png + desc_iptc_blocked.jpg)."""
@@ -2275,6 +2299,11 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         """skipped_json = 1 (bad_json.jpg.json contains invalid JSON)."""
         self.assertEqual(self.stats.skipped_json, 1,
                          f"Expected 1 skipped_json, got {self.stats.skipped_json}")
+
+    def test_stats_ext_mismatches(self) -> None:
+        """ext_mismatches = 1 (mismatch_photo.dng is actually JPEG)."""
+        self.assertEqual(self.stats.ext_mismatches, 1,
+                         f"Expected 1 ext_mismatches, got {self.stats.ext_mismatches}")
 
     # ------------------------------------------------------------------
     # Category 13 — Video UTC Time
@@ -2629,6 +2658,59 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                           "xmp_no_dates.jpg: IPTC:DigitalCreationTime should not be added")
 
     # ------------------------------------------------------------------
+    # Category 17 — Extension Mismatch
+    # ------------------------------------------------------------------
+    # Files where the extension does not match the actual content type
+    # (e.g. JPEG content with .DNG extension from Google Photos export).
+    # The merger should detect the mismatch, temporarily rename for
+    # ExifTool, write all tags correctly, and preserve the original
+    # filename (including the JSON title).
+
+    def test_ext_mismatch_output_exists(self) -> None:
+        """Mismatch file appears in output with the original .dng extension."""
+        out = self._find_output_file('mismatch_photo.dng')
+        self.assertIsNotNone(out, "mismatch_photo.dng not found in output")
+
+    def test_ext_mismatch_dates_written(self) -> None:
+        """Mismatch file has correct EXIF dates and timezone written."""
+        tags = self._read_tags('mismatch_photo.dng', [
+            'EXIF:DateTimeOriginal', 'EXIF:CreateDate', 'EXIF:ModifyDate',
+            'EXIF:OffsetTimeOriginal',
+        ])
+        # Default epoch 1723113846 → 2024:08:08 12:44:06 in GMT+2.
+        dt = tags.get('EXIF:DateTimeOriginal')
+        self.assertIsNotNone(dt, "mismatch_photo.dng: EXIF:DateTimeOriginal missing")
+        self.assertIn('2024:08:08 12:44:06', str(dt),
+                      f"mismatch_photo.dng: DateTimeOriginal wrong: {dt!r}")
+        offset = tags.get('EXIF:OffsetTimeOriginal')
+        self.assertIsNotNone(offset,
+                             "mismatch_photo.dng: EXIF:OffsetTimeOriginal missing")
+        self.assertIn('+02:00', str(offset),
+                      f"mismatch_photo.dng: OffsetTimeOriginal wrong: {offset!r}")
+
+    def test_ext_mismatch_gps_written(self) -> None:
+        """Mismatch file has GPS coordinates written from JSON."""
+        tags = self._read_tags('mismatch_photo.dng', [
+            'EXIF:GPSLatitude', 'EXIF:GPSLongitude',
+        ])
+        lat = tags.get('EXIF:GPSLatitude')
+        self.assertIsNotNone(lat, "mismatch_photo.dng: EXIF:GPSLatitude missing")
+        self.assertAlmostEqual(float(lat), 25.78, places=1,
+                               msg=f"mismatch_photo.dng: GPSLatitude wrong: {lat!r}")
+
+    def test_ext_mismatch_title_preserved(self) -> None:
+        """Mismatch file output uses the JSON title (keeps original .dng extension)."""
+        out = self._find_output_file('mismatch_photo.dng')
+        self.assertIsNotNone(out, "mismatch_photo.dng not found in output")
+        # The file should be in YYYY/MM/ with the title from JSON
+        self.assertEqual(out.name, 'mismatch_photo.dng',
+                         f"Output filename should be 'mismatch_photo.dng', got {out.name!r}")
+
+    def test_ext_mismatch_filesystem_timestamp(self) -> None:
+        """Mismatch file has filesystem mtime matching the JSON epoch."""
+        self._assert_output_mtime('mismatch_photo.dng', 1723113846)
+
+    # ------------------------------------------------------------------
     # Infrastructure Validation
     # ------------------------------------------------------------------
     # Tests that validate the test framework itself: failure detection,
@@ -2693,6 +2775,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         print(f'  GPS written       : {s.gps_written}')
         print(f'  Descriptions clrd : {s.descriptions_cleared}')
         print(f'  Duplicates renamed: {s.duplicates_renamed}')
+        print(f'  Ext mismatches    : {s.ext_mismatches}')
         print(f'  Errors            : {s.errors}')
         print('=' * 60)
         print(f'\n  Input  : {cls.input_dir}')
@@ -2789,28 +2872,28 @@ class TestSingleWorker(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_serial_stats_total_count(self) -> None:
-        """Serial: total media files = 177."""
-        self.assertEqual(self.stats.total_media_files, 177)
+        """Serial: total media files = 178."""
+        self.assertEqual(self.stats.total_media_files, 178)
 
     def test_serial_stats_matched_count(self) -> None:
-        """Serial: matched files = 170."""
-        self.assertEqual(self.stats.matched, 170)
+        """Serial: matched files = 171."""
+        self.assertEqual(self.stats.matched, 171)
 
     def test_serial_stats_orphan_count(self) -> None:
         """Serial: orphan files = 7."""
         self.assertEqual(self.stats.orphans, 7)
 
     def test_serial_stats_written_count(self) -> None:
-        """Serial: written files = 177."""
-        self.assertEqual(self.stats.written, 177)
+        """Serial: written files = 178."""
+        self.assertEqual(self.stats.written, 178)
 
     def test_serial_stats_zero_errors(self) -> None:
         """Serial: zero errors."""
         self.assertEqual(self.stats.errors, 0)
 
     def test_serial_stats_gps_written(self) -> None:
-        """Serial: GPS tags written = 100."""
-        self.assertEqual(self.stats.gps_written, 100)
+        """Serial: GPS tags written = 101."""
+        self.assertEqual(self.stats.gps_written, 101)
 
     def test_serial_stats_sidecars_created(self) -> None:
         """Serial: XMP sidecars created = 80."""
@@ -2827,6 +2910,10 @@ class TestSingleWorker(unittest.TestCase):
     def test_serial_stats_skipped_json(self) -> None:
         """Serial: skipped JSON = 1."""
         self.assertEqual(self.stats.skipped_json, 1)
+
+    def test_serial_stats_ext_mismatches(self) -> None:
+        """Serial: ext mismatches = 1."""
+        self.assertEqual(self.stats.ext_mismatches, 1)
 
     # ------------------------------------------------------------------
     # Output structure — verify key files exist
@@ -2897,6 +2984,7 @@ if __name__ == '__main__':
                                        "test_parentheses_",    "test_uppercase_",
                                        "test_special_filename_")),
         ("EXIF Preservation",         ("test_preservation_",)),
+        ("Extension Mismatch",        ("test_ext_mismatch_",)),
         ("Infrastructure Validation", ("test_infra_",)),
         ("Single Worker (serial)",    ("test_serial_",)),
     ]

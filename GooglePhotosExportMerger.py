@@ -733,6 +733,7 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
                     source = info.source_path.suffix.lower()
                     if actual != source and _is_real_ext_mismatch(source, actual):
                         info.actual_ext = actual
+                        stats.ext_mismatches += 1
                         self.logger.info("Extension mismatch for %s: content is %s",
                                          self._rel(info.source_path), actual_type_ext)
 
@@ -809,6 +810,7 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
                     source = info.source_path.suffix.lower()
                     if actual != source and _is_real_ext_mismatch(source, actual):
                         info.actual_ext = actual
+                        stats.ext_mismatches += 1
                         self.logger.info("Extension mismatch for orphan %s: content is %s",
                                          self._rel(info.source_path), actual_type_ext)
 
