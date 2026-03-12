@@ -1417,7 +1417,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # Category 5 — Descriptions
     # ------------------------------------------------------------------
 
-    _DESC_TAGS = ['EXIF:ImageDescription', 'XMP:Description', 'EXIF:UserComment']
+    _DESC_TAGS = ['EXIF:ImageDescription', 'XMP:Description', 'EXIF:UserComment', 'IPTC:Caption-Abstract']
 
     # 'present' → at least one desc tag has the substring (or any value if substring is None)
     # 'absent'  → all desc tags are falsy (empty / missing)
@@ -1492,7 +1492,7 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     def test_description_blocked_cleared(self) -> None:
         """'SONY DSC' is in blocked list → all description tags cleared in output."""
         tags = self._read_tags('desc_blocked.jpg', self._DESC_TAGS)
-        for tag in ('EXIF:ImageDescription', 'XMP:Description', 'EXIF:UserComment'):
+        for tag in ('EXIF:ImageDescription', 'XMP:Description', 'EXIF:UserComment', 'IPTC:Caption-Abstract'):
             val = tags.get(tag)
             self.assertFalse(val, f"{tag} not cleared for blocked description: {val!r}")
 

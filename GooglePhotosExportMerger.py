@@ -28,7 +28,7 @@ DATE_TAGS_PRIORITY = [
     'EXIF:ModifyDate',
 ]
 
-DESC_READ_TAGS = ['EXIF:UserComment', 'EXIF:ImageDescription', 'XMP:Description']
+DESC_READ_TAGS = ['EXIF:UserComment', 'EXIF:ImageDescription', 'XMP:Description', 'IPTC:Caption-Abstract']
 
 GMT_PLUS_2 = timezone(timedelta(hours=2))
 
@@ -161,6 +161,7 @@ def _do_process_matched(et, info: MediaFileInfo, stats: MergeStats,
         params.append('-EXIF:UserComment=')
         params.append('-EXIF:ImageDescription=')
         params.append('-XMP-dc:Description=')
+        params.append('-IPTC:Caption-Abstract=')
         stats.descriptions_cleared += 1
     elif info.description and info.description.strip():
         escaped, needs_E = _escape_description(info.description)
@@ -230,6 +231,7 @@ def _do_process_orphan(et, info: MediaFileInfo, stats: MergeStats,
                 '-EXIF:UserComment=',
                 '-EXIF:ImageDescription=',
                 '-XMP-dc:Description=',
+                '-IPTC:Caption-Abstract=',
                 str(info.output_path),
             ]
             _execute_et(et, clear_params)
