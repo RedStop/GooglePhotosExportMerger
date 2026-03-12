@@ -166,6 +166,14 @@ def _do_process_matched(et, info: MediaFileInfo, stats: MergeStats,
             params.append(f'-XMP-exif:DateTimeOriginal={local_with_tz}')
             params.append(f'-XMP-xmp:CreateDate={local_with_tz}')
             params.append(f'-XMP-xmp:ModifyDate={local_with_tz}')
+        elif info.write_strategy == WriteStrategy.PARTIAL_WITH_SIDECAR:
+            # PNG/GIF lack EXIF; -alldates writes to XMP but drops the
+            # timezone suffix.  Write XMP date tags explicitly so the
+            # timezone is preserved in both the file and its sidecar.
+            local_with_tz = f'{dt_str}{tz_str}'
+            params.append(f'-XMP-exif:DateTimeOriginal={local_with_tz}')
+            params.append(f'-XMP-xmp:CreateDate={local_with_tz}')
+            params.append(f'-XMP-xmp:ModifyDate={local_with_tz}')
         else:
             params.append(f'-alldates={dt_str}')
             params.append(f'-EXIF:ExifIFD:OffsetTime={tz_str}')
