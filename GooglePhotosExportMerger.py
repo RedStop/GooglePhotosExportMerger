@@ -265,6 +265,10 @@ def _do_process_matched(et, info: MediaFileInfo, stats: MergeStats,
             params.extend(_build_gps_params(info.gps))
             stats.gps_written += 1
 
+        # Recompute IPTCDigest so it stays in sync after any IPTC changes.
+        # Harmless no-op when no IPTC data exists.
+        params.append('-IPTCDigest=new')
+
         # Use -o to copy source to output with metadata in one step
         params.append('-o')
         params.append(str(info.output_path))
@@ -362,6 +366,8 @@ def _do_process_orphan(et, info: MediaFileInfo, stats: MergeStats,
     # Only call ExifTool if there are tag params beyond the base three
     # (charset, filename, overwrite_original).
     if len(update_params) > 3:
+        # Recompute IPTCDigest so it stays in sync after any IPTC changes.
+        update_params.append('-IPTCDigest=new')
         update_params.append(str(info.output_path))
         try:
             _execute_et(et, update_params)
