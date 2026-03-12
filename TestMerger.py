@@ -684,10 +684,22 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
             ('desc_multiline',       'Line one\nLine two\nLine three\nLine four'),
             ('desc_whitespace',      '   '),         # spaces only → treated as empty
             ('desc_partial_blocked', 'SONY DSC Extended'),  # NOT blocked (exact match only)
+            ('desc_iptc_blocked', 'SONY DSC'),            # blocked + source has IPTC:Caption-Abstract → cleared
+            ('desc_iptc_updated', 'New description'),      # source has IPTC:Caption-Abstract → updated
         ]
         for stem, desc in _desc_cases:
             make_media_file(d / f'{stem}.jpg')
             make_json_file(d / f'{stem}.jpg.json', description=desc)
+
+        # Pre-embed IPTC:Caption-Abstract on specific files so the merger can
+        # detect and handle the tag (clear or update) based on the source file.
+        with exiftool.ExifToolHelper() as _et:
+            _et.set_tags([str(d / 'desc_iptc_blocked.jpg')],
+                         {'IPTC:Caption-Abstract': 'SONY DSC'},
+                         params=['-overwrite_original'])
+            _et.set_tags([str(d / 'desc_iptc_updated.jpg')],
+                         {'IPTC:Caption-Abstract': 'Old IPTC caption'},
+                         params=['-overwrite_original'])
 
         # Description multi-format — non-JPG formats
         _desc_multiformat = [
@@ -1432,6 +1444,8 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
         'desc_blocked.jpg':         ('absent',  None),
         'desc_long.jpg':            ('present', None),
         'desc_partial_blocked.jpg': ('present', 'SONY DSC Extended'),
+        'desc_iptc_blocked.jpg':    ('absent',  None),
+        'desc_iptc_updated.jpg':    ('present', 'New description'),
     }
 
     def _assert_description(self, filename: str, state: str,
@@ -1518,6 +1532,26 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     def test_description_partial_blocked_not_cleared(self) -> None:
         """'SONY DSC Extended' must NOT be cleared — exact match only blocks 'SONY DSC'."""
         self._assert_description('desc_partial_blocked.jpg', 'present', 'SONY DSC Extended')
+
+    def test_description_iptc_blocked_cleared(self) -> None:
+        """Source has IPTC:Caption-Abstract='SONY DSC' → all desc tags including IPTC cleared."""
+        tags = self._read_tags('desc_iptc_blocked.jpg', self._DESC_TAGS)
+        for tag in ('EXIF:ImageDescription', 'XMP:Description', 'EXIF:UserComment', 'IPTC:Caption-Abstract'):
+            val = tags.get(tag)
+            self.assertFalse(val, f"{tag} not cleared for IPTC blocked description: {val!r}")
+
+    def test_description_iptc_updated(self) -> None:
+        """Source has IPTC:Caption-Abstract='Old IPTC caption', JSON desc='New description'
+        → IPTC:Caption-Abstract updated to new description."""
+        tags = self._read_tags('desc_iptc_updated.jpg', self._DESC_TAGS)
+        iptc = tags.get('IPTC:Caption-Abstract', '')
+        self.assertEqual(iptc, 'New description',
+                         f"IPTC:Caption-Abstract not updated: {iptc!r}")
+        # Other desc tags should also have the new description
+        for tag in ('EXIF:ImageDescription', 'XMP:Description'):
+            val = tags.get(tag, '')
+            self.assertIn('New description', str(val),
+                          f"{tag} missing new description: {val!r}")
 
     def test_description_consistency(self) -> None:
         """Absent/present state and optional substring check for every description test file."""
@@ -2129,26 +2163,26 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
     # Category 12 — Stats Verification
     # ------------------------------------------------------------------
     # Counts derivation (after multi-format expansion):
-    #   total=173  (166 matched + 7 orphans)
-    #   matched=166 (previous 60 + 92 GPS multi-format + 6 TZ fallback + 8 Desc multi-format)
+    #   total=175  (168 matched + 7 orphans)
+    #   matched=168 (previous 62 + 92 GPS multi-format + 6 TZ fallback + 8 Desc multi-format)
     #   orphans=7   (unchanged)
     #   gps=100     (98 GPS Tests [8 dirs × 12 fmts + 2 altitude] + sc_png + sc_avi)
     #   sidecars=80 (previous 14 + 56 GPS sidecar [7 fmts × 8 dirs]
     #               + 4 TZ fallback sidecar + 6 Desc sidecar)
-    #   descriptions_cleared=2  (desc_blocked.jpg + desc_blocked.png)
+    #   descriptions_cleared=3  (desc_blocked.jpg + desc_blocked.png + desc_iptc_blocked.jpg)
     #   duplicates_renamed=3    (unchanged)
-    #   written=173
+    #   written=175
     #   errors=0
 
     def test_stats_total_count(self) -> None:
-        """Total media files processed = 173 (166 matched + 7 orphans)."""
-        self.assertEqual(self.stats.total_media_files, 173,
-                         f"Expected 173 total, got {self.stats.total_media_files}")
+        """Total media files processed = 175 (168 matched + 7 orphans)."""
+        self.assertEqual(self.stats.total_media_files, 175,
+                         f"Expected 175 total, got {self.stats.total_media_files}")
 
     def test_stats_matched_count(self) -> None:
-        """Matched files (with JSON) = 166."""
-        self.assertEqual(self.stats.matched, 166,
-                         f"Expected 166 matched, got {self.stats.matched}")
+        """Matched files (with JSON) = 168."""
+        self.assertEqual(self.stats.matched, 168,
+                         f"Expected 168 matched, got {self.stats.matched}")
 
     def test_stats_orphan_count(self) -> None:
         """Orphan files (no JSON) = 7."""
@@ -2171,14 +2205,14 @@ class TestGooglePhotosExportMerger(unittest.TestCase):
                          f"Expected 0 errors, got {self.stats.errors}")
 
     def test_stats_written_count(self) -> None:
-        """Files written = 173 (total_media_files when errors == 0)."""
-        self.assertEqual(self.stats.written, 173,
-                         f"Expected 173 written, got {self.stats.written}")
+        """Files written = 175 (total_media_files when errors == 0)."""
+        self.assertEqual(self.stats.written, 175,
+                         f"Expected 175 written, got {self.stats.written}")
 
     def test_stats_descriptions_cleared(self) -> None:
-        """descriptions_cleared = 2 (desc_blocked.jpg + desc_blocked.png)."""
-        self.assertEqual(self.stats.descriptions_cleared, 2,
-                         f"Expected 2 descriptions cleared, got {self.stats.descriptions_cleared}")
+        """descriptions_cleared = 3 (desc_blocked.jpg + desc_blocked.png + desc_iptc_blocked.jpg)."""
+        self.assertEqual(self.stats.descriptions_cleared, 3,
+                         f"Expected 3 descriptions cleared, got {self.stats.descriptions_cleared}")
 
     def test_stats_duplicates_renamed(self) -> None:
         """duplicates_renamed = 3 (same_name_b.jpg, photo(2).jpg, same_name_b.mp4)."""
@@ -2614,20 +2648,20 @@ class TestSingleWorker(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_serial_stats_total_count(self) -> None:
-        """Serial: total media files = 173."""
-        self.assertEqual(self.stats.total_media_files, 173)
+        """Serial: total media files = 175."""
+        self.assertEqual(self.stats.total_media_files, 175)
 
     def test_serial_stats_matched_count(self) -> None:
-        """Serial: matched files = 166."""
-        self.assertEqual(self.stats.matched, 166)
+        """Serial: matched files = 168."""
+        self.assertEqual(self.stats.matched, 168)
 
     def test_serial_stats_orphan_count(self) -> None:
         """Serial: orphan files = 7."""
         self.assertEqual(self.stats.orphans, 7)
 
     def test_serial_stats_written_count(self) -> None:
-        """Serial: written files = 173."""
-        self.assertEqual(self.stats.written, 173)
+        """Serial: written files = 175."""
+        self.assertEqual(self.stats.written, 175)
 
     def test_serial_stats_zero_errors(self) -> None:
         """Serial: zero errors."""
@@ -2642,8 +2676,8 @@ class TestSingleWorker(unittest.TestCase):
         self.assertEqual(self.stats.sidecars_created, 80)
 
     def test_serial_stats_descriptions_cleared(self) -> None:
-        """Serial: descriptions cleared = 2."""
-        self.assertEqual(self.stats.descriptions_cleared, 2)
+        """Serial: descriptions cleared = 3."""
+        self.assertEqual(self.stats.descriptions_cleared, 3)
 
     def test_serial_stats_duplicates_renamed(self) -> None:
         """Serial: duplicates renamed = 3."""

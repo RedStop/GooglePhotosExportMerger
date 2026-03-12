@@ -26,6 +26,7 @@ class MediaFileInfo:
     month: Optional[str] = None
     is_orphan: bool = False
     clear_descriptions: bool = False
+    has_iptc_caption: bool = False
     date_source: Optional[str] = None
     resolved_datetime: Optional[datetime] = None
     error: Optional[str] = None
@@ -277,7 +278,10 @@ class AbstractMediaMerger(ABC):
             self.logger.info("  Date: %s (source: %s)", info.resolved_datetime.isoformat(), info.date_source)
 
         if info.clear_descriptions:
-            self.logger.info("  Blocked description detected — will clear UserComment, ImageDescription, XMP:Description")
+            if info.has_iptc_caption:
+                self.logger.info("  Blocked description detected — will clear UserComment, ImageDescription, XMP:Description, IPTC:Caption-Abstract")
+            else:
+                self.logger.info("  Blocked description detected — will clear UserComment, ImageDescription, XMP:Description")
 
         if not info.is_orphan:
             tags = []

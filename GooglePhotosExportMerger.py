@@ -161,7 +161,8 @@ def _do_process_matched(et, info: MediaFileInfo, stats: MergeStats,
         params.append('-EXIF:UserComment=')
         params.append('-EXIF:ImageDescription=')
         params.append('-XMP-dc:Description=')
-        params.append('-IPTC:Caption-Abstract=')
+        if info.has_iptc_caption:
+            params.append('-IPTC:Caption-Abstract=')
         stats.descriptions_cleared += 1
     elif info.description and info.description.strip():
         escaped, needs_E = _escape_description(info.description)
@@ -169,6 +170,8 @@ def _do_process_matched(et, info: MediaFileInfo, stats: MergeStats,
             params.append('-E')
         params.append(f'-XMP-dc:Description={escaped}')
         params.append(f'-EXIF:ImageDescription={escaped}')
+        if info.has_iptc_caption:
+            params.append(f'-IPTC:Caption-Abstract={escaped}')
 
     if info.gps:
         params.extend(_build_gps_params(info.gps))
@@ -231,9 +234,10 @@ def _do_process_orphan(et, info: MediaFileInfo, stats: MergeStats,
                 '-EXIF:UserComment=',
                 '-EXIF:ImageDescription=',
                 '-XMP-dc:Description=',
-                '-IPTC:Caption-Abstract=',
-                str(info.output_path),
             ]
+            if info.has_iptc_caption:
+                clear_params.append('-IPTC:Caption-Abstract=')
+            clear_params.append(str(info.output_path))
             _execute_et(et, clear_params)
             stats.descriptions_cleared += 1
         except Exception as e:
@@ -473,7 +477,7 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
         for dir_path, infos in matched_by_dir.items():
             file_paths = [str(info.source_path) for info in infos]
             tz_tags = ['EXIF:OffsetTimeOriginal', 'EXIF:OffsetTime']
-            read_tags = tz_tags + (DESC_READ_TAGS if self.blocked_descriptions else [])
+            read_tags = tz_tags + (DESC_READ_TAGS if self.blocked_descriptions else ['IPTC:Caption-Abstract'])
 
             try:
                 tag_results = self._et.get_tags(file_paths, read_tags)
@@ -482,6 +486,10 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
                 tag_results = [{} for _ in infos]
 
             for info, tags in zip(infos, tag_results):
+                # Track whether source file has IPTC:Caption-Abstract
+                if tags.get('IPTC:Caption-Abstract'):
+                    info.has_iptc_caption = True
+
                 # Check blocked descriptions
                 if self.blocked_descriptions and info.json_data:
                     json_desc = info.json_data.get('description', '')
@@ -530,7 +538,7 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
         # Resolve dates for orphan files (batch read per directory)
         for dir_path, infos in orphans_by_dir.items():
             file_paths = [str(info.source_path) for info in infos]
-            read_tags = DATE_TAGS_PRIORITY + (DESC_READ_TAGS if self.blocked_descriptions else [])
+            read_tags = DATE_TAGS_PRIORITY + (DESC_READ_TAGS if self.blocked_descriptions else ['IPTC:Caption-Abstract'])
 
             try:
                 tag_results = self._et.get_tags(file_paths, read_tags)
@@ -539,6 +547,10 @@ class GooglePhotosExportMerger(AbstractMediaMerger):
                 tag_results = [{} for _ in infos]
 
             for info, tags in zip(infos, tag_results):
+                # Track whether source file has IPTC:Caption-Abstract
+                if tags.get('IPTC:Caption-Abstract'):
+                    info.has_iptc_caption = True
+
                 # Check blocked descriptions on existing EXIF tags
                 if self.blocked_descriptions:
                     for desc_tag in DESC_READ_TAGS:
